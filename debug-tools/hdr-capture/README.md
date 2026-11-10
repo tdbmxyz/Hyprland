@@ -44,6 +44,10 @@ Options and additional scenarios:
 - Source `--cursor`: controlled 16×16 SDR cursor at `(900,450)`; capture with
   embedded cursor (omit `--no-cursor`) and check with `check-native.py --cursor`.
 - Source `--lock`: lock only this private compositor; pending captures must fail.
+- Source `--sdr`: an independent, untagged sRGB white/gray toplevel. Float it at
+  `(64,64)` with size 512×128 over a paused HDR application and validate with
+  `check-overlay.py BACKGROUND.raw MIXED.raw`. Both captures must omit cursors.
+  Keep Main at global `(0,0)`; monitor auto-placement can change window positions.
 - Probe `--srgb` and `--untagged`: explicit SDR versus legacy SDR regression.
 - Probe `--frames 145 --discard-pixels`: short capture-only throughput; retain
   JSON timing. This is not capture-to-encode or sustained streaming performance.
@@ -78,6 +82,70 @@ These exercise exact SHM ramps, both capture transports, explicit SDR policy,
 independent DMA-BUF lifetime after capture shutdown, and NVENC Main10 software
 decode. `wayland_unsupported_compositor` is a separate ignored test: point it at
 the **private parent** socket without the experimental extension, not the child.
+
+## Sustained capture-to-encode and image comparison
+
+The native fixture must cover the entire output at scale 1. After launching a
+3440×1440/145 private lab and exporting its `lab.env`, run from the Stargaze
+worktree (with no other live tests in parallel):
+
+```bash
+STARGAZE_TEST_SECONDS=120 STARGAZE_TEST_FPS=145 \
+  STARGAZE_TEST_REPORT="$XDG_RUNTIME_DIR/native-dma.json" \
+  nix develop .#cuda -c cargo test -p stargaze-server wayland_capture_encode_endurance -- --ignored --nocapture --test-threads=1
+# Add STARGAZE_TEST_SHM=1 for the explicit, slower SHM diagnostic.
+# Set STARGAZE_TEST_NATIVE=0 for arbitrary HDR application content instead of ramps.
+```
+
+The test reports rate, packet timing, per-second RSS/FD samples, and saves a
+final recovery GOP (`.hevc`) plus its last decoded YUV420P10LE frame (`.yuv`).
+It requests one late IDR, not periodic IDRs: production intentionally uses an
+infinite GOP. The final GOP is retained only briefly to avoid measuring a leak
+created by the test itself. The test checks packet continuity and decoded HDR
+color/layout, with native ramp assertions when applicable. Software decoding
+happens after the measured interval. Timing is host-side and excludes network,
+client display, and scene rendering before capture delivery.
+
+`wayland_capture_source_changes` resizes, changes color, then removes Main.
+It must run **alone**, with `--ignored --nocapture --test-threads=1`; the lab's
+output/source will need recreation afterwards. It validates termination rather
+than silently feeding changed-contract frames to a fixed-mode encoder.
+
+For a paused scene, compare a raw capture to that final decoded frame:
+
+```bash
+python3 debug-tools/hdr-capture/compare-encode.py --self-test
+python3 debug-tools/hdr-capture/compare-encode.py "$lab/frame.raw" "$lab/run.yuv" \
+  --reference-yuv "$lab/reference.yuv" > "$lab/comparison.json"
+```
+
+This computes full-frame Y/U/V code errors and PSNR against the known BT.2020-NCL
+matrix and 2×2 chroma average. Capture again after the run and require byte-for-
+byte agreement with the first raw frame: seeking a paused player can return
+before decoding/rendering settles. A mismatched scene must not be accepted as
+an encoder comparison.
+
+For photographic application testing, mpv Vulkan works on the recorded driver:
+`--vo=gpu-next --gpu-api=vulkan --gpu-context=waylandvk --target-colorspace-hint=yes
+--target-prim=bt.2020 --target-trc=pq --target-peak=10000 --tone-mapping=clip
+--dither=no --no-audio --osc=no --osd-level=0`. Confirm the log's actual swapchain
+format (`R16G16B16A16_SFLOAT` in this run) AND ready Wayland PQ description; an
+initial RGB10/sRGB configuration before the first decoded HDR frame is not the
+final contract. Use `--pause=yes` for image comparisons. The downloaded photo
+demo and resulting images are not distributed in this repository; provenance
+and hashes are in [the numerical record](validation/2026-11-10.json).
+
+To inspect comparable **SDR previews** of the reference and decoded YUV frames,
+apply the same explicit input metadata and tone mapper to each, for example:
+
+```bash
+ffmpeg -f rawvideo -pixel_format yuv420p10le -video_size 1920x1080 -i frame.yuv \
+  -vf 'zscale=pin=bt2020:tin=smpte2084:min=bt2020nc:rin=limited:p=bt2020:t=linear:m=gbr:r=full:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=mobius:desat=0,zscale=t=iec61966-2-1:m=gbr:r=full,format=rgb24,scale=960:540' \
+  -frames:v 1 preview.png
+```
+
+Preview similarity is not an HDR panel measurement. See the validation record
+for measured native/application rates and remaining limits.
 
 ## Parent compatibility and older mpv experiment
 

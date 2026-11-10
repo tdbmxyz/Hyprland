@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "host": {"gpu": "NVIDIA RTX 3090", "driver": "595.112.07"},
+  "revisions": {
+    "hyprland_compositor": "b9df23ef7d397a84016237eaaec0ba62964cd192",
+    "hyprland_comparison_tools": "927759f522435a72e20620f71c7a25f45738e4ba",
+    "stargaze_initial": "374d22a3a5fa4bc43095d4eef7a0ab0ed3270583",
+    "stargaze_pacing_fix": "2ea95a5",
+    "stargaze_endurance_tests": "42036cd6abbe2f725ea3b36be60afca9c5063040",
+    "unsigned_local_commits": true
+  },
+  "pinned_packages": {
+    "hyprland": "/nix/store/ns6g5aazwkxyaahkwd278xy80br52wyh-hyprland-0.57.2+date=2026-11-10_b9df23e",
+    "stargaze": "/nix/store/68crpc2vhxhizigrhml6cz56p6d23js0-stargaze-server-1.5.0",
+    "hyprland_tests_passed": 868,
+    "stargaze_tests_passed": 287,
+    "stargaze_tests_skipped": 34
+  },
+  "native_rgb10": {
+    "geometry": [3440, 1440],
+    "neutral_and_primary_unique_codes": [1024, 1024, 1024, 1024],
+    "maximum_capture_code_error": 0,
+    "shm_dmabuf_pixel_mismatches": 0,
+    "before_pacing_fix": {
+      "seconds": 120.004958, "frames": 17266, "fps": 143.877,
+      "rss_kib_start": 460388, "rss_kib_end": 461076, "fds_start": 75, "fds_end": 75
+    },
+    "after_pacing_fix": {
+      "seconds": 120.003073, "frames": 17399, "fps": 144.988,
+      "queue_us": {"p50": 16, "p95": 19, "p99": 26, "max": 2768},
+      "convert_us": {"p50": 4558, "p95": 4603, "p99": 4686, "max": 10399},
+      "rss_kib_start": 460468, "rss_kib_end": 461156, "fds_start": 76, "fds_end": 76
+    },
+    "shm_diagnostic_path": {
+      "seconds": 60.016006, "frames": 3090, "fps": 51.486,
+      "rss_kib_start": 523936, "rss_kib_end": 524244, "fds_start": 51, "fds_end": 51
+    },
+    "static_main10_comparison": {
+      "psnr_db_yuv": [76.63577589435378, 83.13064903637523, 86.92491362677436],
+      "max_error_codes_yuv": [1, 3, 1]
+    }
+  },
+  "photographic_application": {
+    "source_url": "https://www.acutancephotography.com/assets/media/slideshow-hdr10-av1-test-12s.mp4",
+    "source_sha256": "9fe1cda2468c1bd3d51c2b80b906b108c2ea264fa1c051faca5cd3a31863bc45",
+    "source_format": "3840x2160, AV1 YUV420P10LE, BT.2020 NCL/PQ, 25 fps, 12 seconds",
+    "source_limitation": "Photographic demo labels its SDR/HDR variants Synthetic_SDR and Synthetic_HDR; not a native-camera HDR or game validation.",
+    "player": "mpv 0.42.0 / libplacebo, Vulkan Wayland, R16G16B16A16_SFLOAT + PASS_THROUGH, acknowledged BT.2020/PQ surface",
+    "opengl_limitation": "Earlier OpenGL tests used eight-bit EGL; not source-precision evidence.",
+    "paused_mixed_scene": {
+      "geometry": [1920, 1080],
+      "sdr_window": [64, 64, 512, 128],
+      "sdr_white_nits": 160, "sdr_white_pq10": 569, "sdr_gray_pq10": 415,
+      "maximum_code_error_background_white_gray": [0, 0, 0],
+      "shm_dmabuf_pixel_mismatches": 0,
+      "before_after_capture_identical": true,
+      "main10_psnr_db_yuv": [59.144975784713935, 59.547115695976956, 59.8365723491495],
+      "main10_p99_error_codes_yuv": [3, 3, 3],
+      "main10_max_error_codes_yuv": [8, 7, 6]
+    },
+    "playing_1080p": {
+      "seconds": 60.013852, "frames": 3567, "fps": 59.436, "mbps": 41.863,
+      "rss_kib_start": 386600, "rss_kib_end": 396576, "fds_start": 75, "fds_end": 75
+    },
+    "playing_3440x1440": {
+      "seconds": 60.000628, "frames": 8680, "fps": 144.665, "mbps": 51.458,
+      "queue_us": {"p50": 20, "p95": 39, "p99": 473, "max": 36022},
+      "convert_us": {"p50": 4726, "p95": 5545, "p99": 6108, "max": 44628},
+      "rss_kib_start": 460524, "rss_kib_end": 470536, "fds_start": 76, "fds_end": 76,
+      "concurrent_cpu_load": "Nix server package build; the native 120-second paced run had no package build competing."
+    }
+  },
+  "transitions": {
+    "resize": "capture terminated cleanly without delivering a changed-contract frame",
+    "hdr_to_sdr_output": "capture terminated cleanly without delivering a changed-contract frame",
+    "output_removal": "capture terminated cleanly",
+    "sdr_window_movement": "moving to isolated SDR output restored original HDR background byte-for-byte; returning with correct global coordinates restored mixed scene byte-for-byte",
+    "live_encoding_during_window_movement": "10-second 1080p run passed, 59.887 fps, stable FD count"
+  },
+  "measurement_caveats": [
+    "Capture-to-encode only: no transport, audio, AMD client, physical display or panel luminance measurement.",
+    "The photographic source is 25 fps; capture counts are not unique application frames.",
+    "queue_us begins when capture delivers the frame, not when scene rendering starts; convert_us includes GPU preparation/send_frame, and packet drain timing is not total hardware encoding latency.",
+    "The test requests one recovery IDR near its end and retains only that suffix for post-measurement software decoding. Production infinite-GOP behavior is unchanged.",
+    "An earlier diagnostic falsely grew RSS by retaining the entire infinite GOP; bounded retention fixed the test, not production code.",
+    "An initial post-seek comparison correctly failed because the frame had not settled; the recorded Vulkan comparison verifies identical raw captures before and after encoding.",
+    "SDR PNG previews are tone-mapped comparison aids, not proof of HDR panel output.",
+    "Results establish minute-scale stability, not an hours-long soak test or device migration across GPUs."
+  ],
+  "temporary_evidence": {
+    "native_lab": "/tmp/hh.UsJYRm",
+    "photographic_lab": "/tmp/hh.AKRpkT",
+    "comparison_previews": ["/tmp/hh.AKRpkT/vulkan-reference-sdr.png", "/tmp/hh.AKRpkT/vulkan-encode-sdr.png"],
+    "all_labs_stopped": true
+  }
+}

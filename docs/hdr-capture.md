@@ -150,16 +150,71 @@ unknown output cleanly. These tests do not cover live peer presentation or a
 long-running production session. Temporary artifacts are not durable release
 pins.
 
+## Sustained and photographic validation
+
+The [machine-readable validation record](../debug-tools/hdr-capture/validation/2026-11-10.json)
+retains revisions, source provenance, measurements, caveats, and temporary artifact
+paths. The user authorized **unsigned local commits** pending later rebasing and
+signing. Exact builds succeeded for compositor `b9df23ef7` (868 packaged tests)
+and Stargaze `42036cd` (287 workspace tests, 34 hardware skips). Subsequent
+Hyprland changes at `927759f52` are test-client/comparison helpers, not compositor
+rendering changes; that revised client was compiled locally.
+
+At 3440×1440, the native fixture → independent DMA-BUF → NVENC Main10 path
+sustained **144.99 fps for 120 seconds** (17,399 encoded frames). FDs stayed at
+76, RSS grew by 688 KiB, and p99 frame preparation was 4.686 ms. Phase-anchored
+request deadlines removed accumulated wake-up jitter: the prior 120-second run
+was 143.88 fps. Missed deadlines are discarded, not burst-replayed. The SHM
+path remained correct but reached only **51.49 fps for 60 seconds**; it is not
+the high-rate path. Post-run software decoding validates color, precision and
+contiguous packets; full-frame native comparison gave Y/U/V PSNR 76.64/83.13/
+86.92 dB with maximum errors 1/3/1 ten-bit codes.
+
+A 4K/25-fps BT.2020/PQ AV1 photographic demo was played in mpv, with a separate
+sRGB white/gray window over it. **Vulkan**, unlike the earlier OpenGL experiment,
+selected `R16G16B16A16_SFLOAT` pass-through storage and an acknowledged Wayland
+PQ description. Raw SHM and real DMA-BUF captures matched exactly. Every
+background and SDR-window pixel matched expectations (160-nit white = PQ10 569,
+gray = 415), including restoring the scene after moving the SDR window to an
+isolated SDR output and back. Global window coordinates must account for output
+positions; the reproduction fixes Main at `(0,0)`.
+
+The paused Vulkan scene's decoded Main10 output measured **59.14/59.55/59.84 dB
+Y/U/V PSNR**, with p99 error three codes. Raw snapshots before and after encoding
+were identical. Tone-mapped reference/encoded PNGs were also inspected and are
+retained in `/tmp/hh.AKRpkT/`; they do not certify a physical HDR display. The
+photographic demo itself labels its variants Synthetic_SDR/Synthetic_HDR, so it
+is application-playback evidence, not native-camera HDR or game validation.
+
+Playing that application at 3440×1440 delivered **144.67 capture/encode fps over
+60 seconds**, stable FDs, and approximately 10 MiB RSS growth. Its content is only
+25 fps, not 145 unique application frames. A concurrent Nix server build adds
+CPU contention to this run; the native 120-second paced run had no competing
+package build. Resize, HDR→SDR output change, and output removal also terminate
+the direct backend cleanly against the pinned compositor.
+
+The endurance test requests one recovery IDR near its end and retains only
+that suffix for offline decoding. Production uses an infinite GOP; an initial
+test incorrectly retained the entire stream and exceeded its RSS budget. Fixing
+the test bounded memory without changing production GOP policy. A premature
+post-seek image comparison likewise correctly failed; paused-scene comparisons
+must verify settled, identical snapshots.
+
+These are **capture-to-encode** measurements, not network/display latency.
+`queue_us` starts at capture delivery; preparation timing includes GPU conversion
+and submission, while packet drain timing is not total hardware encoding time.
+Both continuation labs (`/tmp/hh.AKRpkT`, `/tmp/hh.UsJYRm`) are stopped. No service,
+physical output, or system configuration was changed.
+
 ## Remaining acceptance gates
 
-- Exercise real HDR video/game content, mixed windows, source movement, and
-  output color/device transitions through the direct backend.
-- Measure sustained 3440×1440/145-fps capture → encode → network → AMD display,
-  including resource usage and long-running buffer lifetime. Per-frame DMA-BUF
-  allocation is deliberately independent; pooling requires an encoder lease
-  contract, not reuse while encoding.
-- Validate actual HDR client presentation and visual/reference-meter calibration;
-  the earlier synthetic-source client results do not certify desktop capture.
-- Preserve immutable fork revisions and rebuild the exact pins for deployment.
-  Obtain explicit user approval before changing compositor/system pins,
-  activating NixOS, or restarting `remote-desktop-Main.service`.
+- Native-camera HDR/game content, hours-long soak tests, device migration, and
+  more complex source/output transitions. Minute-scale stability is not a soak.
+- Sustained capture → network → AMD display at the target rate, including loss,
+  reconnects, resource usage, and actual client presentation/calibration. There
+  is no new end-to-end transport or panel-luminance result here.
+- Per-frame DMA-BUF allocation remains deliberately independent. Pooling needs
+  an encoder lease contract and separate evidence, not early storage reuse.
+- Rebase/sign the local commits when the key is available and rebuild the final
+  exact deployment pins. Obtain explicit approval before changing system or
+  compositor pins, activating NixOS, or restarting the remote-desktop service.
