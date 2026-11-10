@@ -144,9 +144,7 @@ eDynamicPermissionAllowMode CDynamicPermissionManager::clientPermissionMode(wl_c
     }
 
     // if we are here, we need to ask, that's the fallback for all these (keyboards won't come here)
-    askForPermission(client, LOOKUP.value_or(""), permission);
-
-    return PERMISSION_RULE_ALLOW_MODE_PENDING;
+    return askForPermission(client, LOOKUP.value_or(""), permission);
 }
 
 eDynamicPermissionAllowMode CDynamicPermissionManager::clientPermissionModeWithString(pid_t pid, const std::string& str, eDynamicPermissionType permission) {
@@ -202,8 +200,7 @@ eDynamicPermissionAllowMode CDynamicPermissionManager::clientPermissionModeWithS
                 return PERMISSION_RULE_ALLOW_MODE_PENDING;
             } else if ((*it)->m_allowMode == PERMISSION_RULE_ALLOW_MODE_ASK) {
                 LOG(Log::TRACE, "CDynamicPermissionManager::clientHasPermission: permission ask by config rule");
-                askForPermission(nullptr, str, permission, pid);
-                return PERMISSION_RULE_ALLOW_MODE_PENDING;
+                return askForPermission(nullptr, str, permission, pid);
             } else
                 LOG(Log::TRACE, "CDynamicPermissionManager::clientHasPermission: permission ask by config rule");
         }
@@ -224,12 +221,10 @@ eDynamicPermissionAllowMode CDynamicPermissionManager::clientPermissionModeWithS
         return PERMISSION_RULE_ALLOW_MODE_ALLOW;
 
     // if we are here, we need to ask.
-    askForPermission(nullptr, str, permission, pid);
-
-    return PERMISSION_RULE_ALLOW_MODE_PENDING;
+    return askForPermission(nullptr, str, permission, pid);
 }
 
-void CDynamicPermissionManager::askForPermission(wl_client* client, const std::string& binaryPath, eDynamicPermissionType type, pid_t pid) {
+eDynamicPermissionAllowMode CDynamicPermissionManager::askForPermission(wl_client* client, const std::string& binaryPath, eDynamicPermissionType type, pid_t pid) {
     auto rule = m_rules.emplace_back(SP<CDynamicPermissionRule>(new CDynamicPermissionRule(client, type, PERMISSION_RULE_ALLOW_MODE_PENDING)));
 
     if (!client)
@@ -273,16 +268,20 @@ void CDynamicPermissionManager::askForPermission(wl_client* client, const std::s
     } else
         options = {DENY, ALLOW};
 
-    rule->m_dialogBox             = CAsyncDialogBox::create(I18n::i18nEngine()->localize(I18n::TXT_KEY_PERMISSION_TITLE), description, options);
+    rule->m_dialogBox = CAsyncDialogBox::create(I18n::i18nEngine()->localize(I18n::TXT_KEY_PERMISSION_TITLE), description, options);
+    if (!rule->m_dialogBox) {
+        LOG(Log::ERR, "CDynamicPermissionManager::askForPermission: cannot ask for permission without hyprland-dialog, denying request");
+        rule->m_allowMode = PERMISSION_RULE_ALLOW_MODE_DENY;
+        return rule->m_allowMode;
+    }
     rule->m_dialogBox->m_priority = true;
 
-    if (!rule->m_dialogBox) {
-        LOG(Log::ERR, "CDynamicPermissionManager::askForPermission: hyprland-guiutils likely missing, cannot ask! Disabling permission control...");
-        rule->m_allowMode = PERMISSION_RULE_ALLOW_MODE_ALLOW;
-        return;
-    }
-
     rule->m_promise = rule->m_dialogBox->open();
+    if (!rule->m_promise) {
+        LOG(Log::ERR, "CDynamicPermissionManager::askForPermission: failed to open permission dialog, denying request");
+        rule->m_allowMode = PERMISSION_RULE_ALLOW_MODE_DENY;
+        return rule->m_allowMode;
+    }
     rule->m_promise->then([r = WP<CDynamicPermissionRule>(rule), binaryPath, ALLOW, ALLOW_AND_REMEMBER, ALLOW_ONCE, DENY](SP<CPromiseResult<std::string>> pr) {
         if (!r)
             return;
@@ -290,6 +289,7 @@ void CDynamicPermissionManager::askForPermission(wl_client* client, const std::s
         if (pr->hasError()) {
             // not reachable for now
             LOG(Log::TRACE, "CDynamicPermissionRule: error spawning dialog box");
+            r->m_allowMode = PERMISSION_RULE_ALLOW_MODE_DENY;
             if (r->m_promiseResolverForExternal)
                 r->m_promiseResolverForExternal->reject("error spawning dialog box");
             r->m_promiseResolverForExternal.reset();
@@ -317,6 +317,7 @@ void CDynamicPermissionManager::askForPermission(wl_client* client, const std::s
         r->m_promise.reset();
         r->m_promiseResolverForExternal.reset();
     });
+    return rule->m_allowMode;
 }
 
 SP<CPromise<eDynamicPermissionAllowMode>> CDynamicPermissionManager::promiseFor(wl_client* client, eDynamicPermissionType permission) {

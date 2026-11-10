@@ -107,7 +107,7 @@ class CDynamicPermissionManager {
     void                                      removeRulesForClient(wl_client* client);
 
   private:
-    void askForPermission(wl_client* client, const std::string& binaryName, eDynamicPermissionType type, pid_t pid = 0);
+    eDynamicPermissionAllowMode askForPermission(wl_client* client, const std::string& binaryName, eDynamicPermissionType type, pid_t pid = 0);
 
     //
     std::vector<SP<CDynamicPermissionRule>> m_rules;
