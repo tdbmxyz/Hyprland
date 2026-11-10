@@ -1,4 +1,5 @@
 #include "ImageCopyCapture.hpp"
+#include "ImageCaptureColorManagement.hpp"
 #include "../managers/screenshare/ScreenshareManager.hpp"
 #include "../managers/permissions/DynamicPermissionManager.hpp"
 #include "../pointer/PointerManager.hpp"
@@ -45,6 +46,8 @@ CImageCopyCaptureSession::CImageCopyCaptureSession(SP<CExtImageCopyCaptureSessio
         return;
     }
 
+    if (PROTO::imageCaptureColorManagement)
+        m_session->enableExtendedFormats();
     sendConstraints();
 
     m_listeners.constraintsChanged = m_session->m_events.constraintsChanged.listen([this]() {
@@ -191,6 +194,7 @@ void CImageCopyCaptureCursorSession::createFrame(SP<CExtImageCopyCaptureFrameV1>
     m_frameResource = resource;
     m_captured      = false;
     m_buffer.reset();
+    m_imageDescription.reset();
 
     m_frameResource->setDestroy([this](CExtImageCopyCaptureFrameV1* pMgr) { m_frameResource.reset(); });
     m_frameResource->setOnDestroy([this](CExtImageCopyCaptureFrameV1* pMgr) { m_frameResource.reset(); });
@@ -251,6 +255,14 @@ void CImageCopyCaptureCursorSession::createFrame(SP<CExtImageCopyCaptureFrameV1>
         if (!m_session) {
             m_captured = true;
             m_frameResource->sendFailed(EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_STOPPED);
+            return;
+        }
+
+        // Separate cursor images currently only have an sRGB rendering path.
+        // Embedded cursors are composed in the color-managed desktop scene.
+        if (m_imageDescription && m_imageDescription != NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION) {
+            m_captured = true;
+            m_frameResource->sendFailed(EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
             return;
         }
 
@@ -534,6 +546,27 @@ void CImageCopyCaptureProtocol::bindManager(wl_client* client, void* data, uint3
 
         LOG(Log::INFO, "New image copy capture cursor session for source ({}): \"{}\"", source->getTypeName(), source->getName());
     });
+}
+
+CImageCopyCaptureProtocol::eDescriptionResult CImageCopyCaptureProtocol::setFrameImageDescription(wl_resource* resource, NColorManagement::PImageDescription description) {
+    for (const auto& frame : m_frames) {
+        if (frame->m_resource->resource() != resource)
+            continue;
+        if (frame->m_captured)
+            return DESCRIPTION_ALREADY_CAPTURED;
+        if (frame->m_frame)
+            frame->m_frame->setImageDescription(description);
+        return DESCRIPTION_SET;
+    }
+    for (const auto& session : m_cursorSessions) {
+        if (!session->m_frameResource || session->m_frameResource->resource() != resource)
+            continue;
+        if (session->m_captured)
+            return DESCRIPTION_ALREADY_CAPTURED;
+        session->m_imageDescription = description;
+        return DESCRIPTION_SET;
+    }
+    return DESCRIPTION_INVALID_FRAME;
 }
 
 void CImageCopyCaptureProtocol::destroyResource(CExtImageCopyCaptureManagerV1* resource) {

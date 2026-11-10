@@ -216,14 +216,15 @@ CColorManager::CColorManager(SP<CWpColorManagerV1> resource) : m_resource(resour
 
         RESOURCE->m_self = RESOURCE;
 
-        const auto OLD_RES = CColorManagementImageDescription::fromReference(ref);
-        if UNLIKELY (!OLD_RES) {
+        const auto& references = PROTO::colorManagement->m_imageDescriptionReferences;
+        const auto  reference  = std::ranges::find_if(references, [ref](const auto& item) { return item.resource->resource() == ref; });
+        if (reference == references.end() || !reference->description) {
             RESOURCE->resource()->sendFailed(WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED, "Reference image description was not found");
             return;
         }
 
-        RESOURCE->m_allowGetInformation = OLD_RES->m_allowGetInformation;
-        RESOURCE->m_settings            = OLD_RES->m_settings;
+        RESOURCE->m_allowGetInformation = true;
+        RESOURCE->m_settings            = reference->description;
 
         RESOURCE->sendMaybeReady();
     });
@@ -756,6 +757,7 @@ CColorManagementImageDescription::CColorManagementImageDescription(SP<CWpImageDe
         return;
 
     m_client = m_resource->client();
+    m_resource->setData(this);
 
     m_resource->setDestroy([this](CWpImageDescriptionV1* r) { PROTO::colorManagement->destroyResource(this); });
     m_resource->setOnDestroy([this](CWpImageDescriptionV1* r) { PROTO::colorManagement->destroyResource(this); });
@@ -906,6 +908,22 @@ void CColorManagementProtocol::onMonitorImageDescriptionChanged(PHLMONITORREF mo
             output->m_resource->sendImageDescriptionChanged();
     }
     recheckFeedbacks();
+    m_monitorDescriptionChanged.emit(monitor);
+}
+
+void CColorManagementProtocol::createImageDescriptionReference(wl_client* client, uint32_t id, PImageDescription description) {
+    const auto RESOURCE = makeShared<CWpImageDescriptionReferenceV1>(client, 1, id);
+    if (!RESOURCE->resource()) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+
+    m_imageDescriptionReferences.push_back({RESOURCE, description});
+    const auto destroy = [this](CWpImageDescriptionReferenceV1* resource) {
+        std::erase_if(m_imageDescriptionReferences, [resource](const auto& item) { return item.resource.get() == resource; });
+    };
+    RESOURCE->setDestroy(destroy);
+    RESOURCE->setOnDestroy(destroy);
 }
 
 bool CColorManagementProtocol::isClientCMAware(wl_client* client) {

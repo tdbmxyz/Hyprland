@@ -835,6 +835,7 @@ std::vector<SP<IValue>> Values::getConfigValues() {
          */
 
         MS<Bool>("experimental:wp_cm_1_2", "Allow wp-cm-v1 version 2", true),
+        MS<Bool>("experimental:xx_image_capture_color_management", "Enable experimental color-managed image capture (requires restart)", false),
 
         /*
 		 * input_capture:

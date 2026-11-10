@@ -141,6 +141,8 @@ void CScreenshareSession::calculateConstraints() {
         m_formats = {
             DRM_FORMAT_ARGB8888,
         };
+        if (m_extendedFormats)
+            m_formats = colorManagedFormats();
         m_bufferSize = m_workspace->bufferSize();
         m_name       = m_workspace->name();
         if (m_bufferSize.x <= 0 || m_bufferSize.y <= 0)
@@ -185,6 +187,9 @@ void CScreenshareSession::calculateConstraints() {
             return;
     }
 
+    if (m_extendedFormats)
+        m_formats = colorManagedFormats();
+
     LOG(Log::TRACE, "constraints changed for {}", m_name);
 }
 
@@ -209,6 +214,20 @@ void CScreenshareSession::screenshareEvents(bool startSharing) {
 
 const std::vector<DRMFormat>& CScreenshareSession::allowedFormats() const {
     return m_formats;
+}
+
+void CScreenshareSession::enableExtendedFormats() {
+    m_extendedFormats = true;
+    m_formats         = colorManagedFormats();
+}
+
+std::vector<DRMFormat> CScreenshareSession::colorManagedFormats() const {
+    auto formats = m_formats;
+    for (const auto format : {DRM_FORMAT_XBGR2101010, DRM_FORMAT_ABGR2101010}) {
+        if (!std::ranges::contains(formats, format))
+            formats.push_back(format);
+    }
+    return formats;
 }
 
 Vector2D CScreenshareSession::bufferSize() const {

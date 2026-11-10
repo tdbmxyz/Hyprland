@@ -44,6 +44,17 @@ CScreenshareFrame::~CScreenshareFrame() {
     }
 }
 
+bool CScreenshareFrame::setImageDescription(NColorManagement::PImageDescription description) {
+    if (m_shared || !description)
+        return false;
+    m_imageDescription = description;
+    return true;
+}
+
+bool CScreenshareFrame::usesSceneCapture() const {
+    return m_imageDescription.valid();
+}
+
 bool CScreenshareFrame::done() const {
     if (m_session.expired() || m_session->m_stopped)
         return true;
@@ -109,7 +120,7 @@ eScreenshareError CScreenshareFrame::share(SP<IHLBuffer> buffer, const CRegion& 
         return ERROR_BUFFER_SIZE;
     }
 
-    uint32_t bufFormat;
+    uint32_t bufFormat = DRM_FORMAT_INVALID;
     if (buffer->dmabuf().success)
         bufFormat = buffer->dmabuf().format;
     else if (buffer->shm().success)
@@ -119,23 +130,37 @@ eScreenshareError CScreenshareFrame::share(SP<IHLBuffer> buffer, const CRegion& 
         return ERROR_NO_BUFFER;
     }
 
-    if (std::ranges::count_if(m_session->allowedFormats(), [&](const DRMFormat& format) { return format == bufFormat; }) == 0) {
+    const bool colorManagedTenBit = usesSceneCapture() && (bufFormat == DRM_FORMAT_XBGR2101010 || bufFormat == DRM_FORMAT_ABGR2101010);
+    if (!colorManagedTenBit && !std::ranges::contains(m_session->allowedFormats(), bufFormat)) {
         LOG(Log::ERR, "Invalid format {} in {:x}", bufFormat, (uintptr_t)this);
         return ERROR_BUFFER_FORMAT;
+    }
+
+    if (usesSceneCapture()) {
+        const auto& description   = m_imageDescription->value();
+        const bool  highPrecision = description.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_ST2084_PQ ||
+            description.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_HLG || description.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_EXT_LINEAR;
+        if (highPrecision && bufFormat != DRM_FORMAT_XBGR2101010 && bufFormat != DRM_FORMAT_ABGR2101010)
+            return ERROR_BUFFER_FORMAT;
+        // Never substitute an SDR working buffer if the HDR path is unavailable.
+        if (!g_pHyprRenderer->fp16Supported() || description.icc.present || !description.rawICC.empty() ||
+            description.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_LINEAR || (m_session->m_type != SHARE_MONITOR && m_session->m_type != SHARE_WORKSPACE) ||
+            m_session->monitor()->isMirror())
+            return ERROR_UNKNOWN;
     }
 
     m_buffer   = buffer;
     m_callback = callback;
     m_shared   = true;
 
-    if (m_session->m_type == SHARE_MONITOR || m_session->m_type == SHARE_REGION) {
+    if (!usesSceneCapture() && (m_session->m_type == SHARE_MONITOR || m_session->m_type == SHARE_REGION)) {
         const auto PMONITOR = m_session->monitor();
         if (PMONITOR)
             PMONITOR->addDamage(PMONITOR->resources()->pendingMirrorFBDamage());
     }
 
     // schedule a frame so that when a screenshare starts it isn't black until the output is updated
-    if (m_isFirst || m_session->m_type == SHARE_WORKSPACE) {
+    if (m_isFirst || m_session->m_type == SHARE_WORKSPACE || usesSceneCapture()) {
         const auto PMONITOR = m_session->monitor();
         if (PMONITOR)
             PMONITOR->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_NEEDS_FRAME);
@@ -160,6 +185,12 @@ void CScreenshareFrame::copy() {
     if (g_pHyprRenderer->context().active() || done() || m_copyInFlight)
         return;
 
+    if (usesSceneCapture() && (m_bufferSize != m_session->bufferSize() || g_pSessionLockManager->isSessionLocked())) {
+        m_failed = true;
+        m_callback(RESULT_NOT_COPIED);
+        return;
+    }
+
     // tell client to send presented timestamp
     // TODO: is this right? this is right after we commit to aq, not when page flip happens..
     m_callback(RESULT_TIMESTAMP);
@@ -170,7 +201,7 @@ void CScreenshareFrame::copy() {
     // store a snapshot before the permission popup so we don't break screenshots
     const auto PERM = g_pDynamicPermissionManager->clientPermissionMode(m_session->m_client, PERMISSION_TYPE_SCREENCOPY);
     if (PERM == PERMISSION_RULE_ALLOW_MODE_PENDING) {
-        if (m_session->m_type != SHARE_WORKSPACE && (!m_session->m_tempFB || !m_session->m_tempFB->isAllocated()))
+        if (!usesSceneCapture() && m_session->m_type != SHARE_WORKSPACE && (!m_session->m_tempFB || !m_session->m_tempFB->isAllocated()))
             storeTempFB();
 
         // don't copy a frame while allow is pending because screenshot tools will only take the first frame we give, which is empty
@@ -199,6 +230,11 @@ void CScreenshareFrame::copy() {
 void CScreenshareFrame::renderMonitor(Render::CRenderContext& ctx) {
     if ((m_session->m_type != SHARE_MONITOR && m_session->m_type != SHARE_REGION) || done())
         return;
+
+    if (usesSceneCapture()) {
+        renderMonitorScene(ctx);
+        return;
+    }
 
     const auto PMONITOR = m_session->monitor();
 
@@ -335,6 +371,17 @@ void CScreenshareFrame::renderMonitor(Render::CRenderContext& ctx) {
     }
 }
 
+void CScreenshareFrame::renderMonitorScene(Render::CRenderContext& ctx) {
+    const auto MONITOR = m_session->monitor();
+    const auto NOW     = Time::steadyNow();
+    g_pHyprRenderer->renderWorkspace(ctx, MONITOR, MONITOR->m_activeWorkspace, NOW, CBox{{}, m_bufferSize});
+    g_pHyprRenderer->renderIME(ctx, MONITOR, NOW, CBox{{}, m_bufferSize});
+    if (!m_overlayCursor)
+        return;
+    CRegion damage{CBox{{}, m_bufferSize}};
+    Pointer::mgr()->renderSoftwareCursorsFor(ctx, MONITOR, NOW, damage, Pointer::mgr()->untransformedPosition() - MONITOR->m_position, true, true);
+}
+
 void CScreenshareFrame::renderWindow(Render::CRenderContext& ctx) {
     if (m_session->m_type != SHARE_WINDOW || done())
         return;
@@ -423,7 +470,7 @@ void CScreenshareFrame::render(Render::CRenderContext& ctx) {
         return;
     }
 
-    if (m_session->m_tempFB && m_session->m_tempFB->isAllocated()) {
+    if (!usesSceneCapture() && m_session->m_tempFB && m_session->m_tempFB->isAllocated()) {
         CBox texbox = {{}, m_bufferSize};
         g_pHyprRenderer->draw(ctx, CTexPassElement::SRenderData{.tex = m_session->m_tempFB->getTexture(), .box = texbox}, texbox);
         m_session->m_tempFB->release();
@@ -442,7 +489,24 @@ void CScreenshareFrame::render(Render::CRenderContext& ctx) {
 bool CScreenshareFrame::beginCopy(SP<Render::IFramebuffer> framebuffer) {
     const bool             WORKSPACE = m_session->m_type == SHARE_WORKSPACE;
     Render::SRenderOptions options;
-    if (WORKSPACE) {
+    if (usesSceneCapture()) {
+        // Store unscaled nits: normalizing 10,000 nits to 1.0 in FP16 collapses
+        // the darkest PQ10 steps into half-float subnormals.
+        if (!m_session->m_colorManagedSceneResources)
+            m_session->m_colorManagedSceneResources =
+                makeShared<Render::CSceneResources>(g_pHyprRenderer->createFB("color-managed capture blur"),
+                                                    Render::SSceneBufferDescription{
+                                                        .format           = DRM_FORMAT_ABGR16161616F,
+                                                        .imageDescription = NColorManagement::CImageDescription::from(NColorManagement::SImageDescription{
+                                                            .transferFunction = NColorManagement::CM_TRANSFER_FUNCTION_LINEAR,
+                                                            .primariesNameSet = true,
+                                                            .primariesNamed   = NColorManagement::CM_PRIMARIES_BT2020,
+                                                            .primaries        = NColorManagement::NColorPrimaries::BT2020,
+                                                            .luminances       = {.min = 0, .max = 10000, .reference = 203},
+                                                        }),
+                                                    });
+        options.sceneResources = m_session->m_colorManagedSceneResources;
+    } else if (WORKSPACE) {
         if (!m_session->m_sceneResources)
             m_session->m_sceneResources = makeShared<Render::CSceneResources>(g_pHyprRenderer->createFB("workspace capture blur"),
                                                                               Render::SSceneBufferDescription{
@@ -455,14 +519,14 @@ bool CScreenshareFrame::beginCopy(SP<Render::IFramebuffer> framebuffer) {
     // beginRender may replace scene damage. Preserve the client's export damage.
     CRegion damage = m_damage;
     if (!g_pHyprRenderer->beginRender(m_session->monitor(), damage, framebuffer ? Render::RENDER_MODE_FULL_FAKE : Render::RENDER_MODE_TO_BUFFER, framebuffer ? nullptr : m_buffer,
-                                      framebuffer, !WORKSPACE, options))
+                                      framebuffer, !WORKSPACE && !usesSceneCapture(), options))
         return false;
 
     auto& ctx = g_pHyprRenderer->context();
-    ctx.m_data.outFB->setImageDescription(NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION);
+    ctx.m_data.outFB->setImageDescription(usesSceneCapture() ? m_imageDescription : NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION);
     ctx.m_data.blockScreenShader = true;
-    ctx.m_renderingCapture       = WORKSPACE;
-    ctx.m_blockSurfaceFeedback   = WORKSPACE;
+    ctx.m_renderingCapture       = WORKSPACE || usesSceneCapture();
+    ctx.m_blockSurfaceFeedback   = WORKSPACE || usesSceneCapture();
     return true;
 }
 
@@ -517,7 +581,7 @@ bool CScreenshareFrame::copyShm() {
     auto outFB = g_pHyprRenderer->createFB();
     if (!outFB || !outFB->alloc(m_bufferSize.x, m_bufferSize.y, shm.format))
         return false;
-    outFB->setImageDescription(NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION);
+    outFB->setImageDescription(usesSceneCapture() ? m_imageDescription : NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION);
 
     if (!beginCopy(outFB)) {
         LOG(Log::ERR, "Can't copy: failed to begin rendering");

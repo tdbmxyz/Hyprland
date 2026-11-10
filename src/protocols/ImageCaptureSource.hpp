@@ -35,6 +35,7 @@ class CImageCaptureSource {
     PHLWINDOWREF                             m_window;
     SP<Screenshare::CWorkspaceCaptureSource> m_workspace;
 
+    friend class CImageCaptureSourceColors;
     friend class CImageCopyCaptureSession;
     friend class CImageCopyCaptureCursorSession;
 };

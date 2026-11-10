@@ -191,13 +191,16 @@ class CColorManagementProtocol : public IWaylandProtocol {
   public:
     CColorManagementProtocol(const wl_interface* iface, const int& ver, const std::string& name, bool debug = false);
 
-    virtual void bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id);
+    virtual void            bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id);
 
-    void         onImagePreferredChanged(uint32_t preferredId);
-    void         recheckFeedbacks();
-    void         onMonitorImageDescriptionChanged(PHLMONITORREF monitor);
+    void                    onImagePreferredChanged(uint32_t preferredId);
+    void                    recheckFeedbacks();
+    void                    onMonitorImageDescriptionChanged(PHLMONITORREF monitor);
 
-    bool         isClientCMAware(wl_client* client);
+    bool                    isClientCMAware(wl_client* client);
+    void                    createImageDescriptionReference(wl_client* client, uint32_t id, NColorManagement::PImageDescription description);
+
+    CSignalT<PHLMONITORREF> m_monitorDescriptionChanged;
 
   private:
     void                                               destroyResource(CColorManager* resource);
@@ -216,6 +219,12 @@ class CColorManagementProtocol : public IWaylandProtocol {
     std::vector<SP<CColorManagementParametricCreator>> m_parametricCreators;
     std::vector<SP<CColorManagementImageDescription>>  m_imageDescriptions;
     bool                                               m_debug = false;
+
+    struct SImageDescriptionReference {
+        SP<CWpImageDescriptionReferenceV1>  resource;
+        NColorManagement::PImageDescription description;
+    };
+    std::vector<SImageDescriptionReference> m_imageDescriptionReferences;
 
     friend class CColorManager;
     friend class CColorManagementOutput;

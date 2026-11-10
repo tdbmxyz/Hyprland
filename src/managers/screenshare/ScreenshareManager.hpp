@@ -58,6 +58,8 @@ namespace Screenshare {
 
         // constraints
         const std::vector<DRMFormat>& allowedFormats() const;
+        std::vector<DRMFormat>        colorManagedFormats() const;
+        void                          enableExtendedFormats();
         Vector2D                      bufferSize() const;
         PHLMONITOR                    monitor() const; // this will return the correct monitor based on type
 
@@ -85,10 +87,12 @@ namespace Screenshare {
         std::string                 m_name   = "";
 
         std::vector<DRMFormat>      m_formats;
-        Vector2D                    m_bufferSize = Vector2D(0, 0);
+        bool                        m_extendedFormats = false;
+        Vector2D                    m_bufferSize      = Vector2D(0, 0);
 
         SP<Render::IFramebuffer>    m_tempFB;
         SP<Render::CSceneResources> m_sceneResources;
+        SP<Render::CSceneResources> m_colorManagedSceneResources;
 
         SP<CEventLoopTimer>         m_shareStopTimer;
         bool                        m_sharing = false;
@@ -174,6 +178,8 @@ namespace Screenshare {
         ~CScreenshareFrame();
 
         bool                done() const;
+        bool                setImageDescription(NColorManagement::PImageDescription description);
+        bool                usesSceneCapture() const;
         eScreenshareError   share(SP<IHLBuffer> buffer, const CRegion& damage, FScreenshareCallback callback);
 
         Vector2D            bufferSize() const;
@@ -181,16 +187,17 @@ namespace Screenshare {
         const CRegion&      damage() const;
 
       private:
-        WP<CScreenshareFrame>   m_self;
-        WP<CScreenshareSession> m_session;
-        FScreenshareCallback    m_callback;
-        SP<IHLBuffer>           m_buffer;
-        Vector2D                m_bufferSize = Vector2D(0, 0);
-        CRegion                 m_damage; // damage in buffer coords
-        bool                    m_shared = false, m_copied = false, m_failed = false;
-        bool                    m_copyInFlight  = false; // a dmabuf copy is issued and waiting on its fence
-        bool                    m_overlayCursor = true;
-        bool                    m_isFirst       = false;
+        WP<CScreenshareFrame>               m_self;
+        WP<CScreenshareSession>             m_session;
+        FScreenshareCallback                m_callback;
+        SP<IHLBuffer>                       m_buffer;
+        NColorManagement::PImageDescription m_imageDescription;
+        Vector2D                            m_bufferSize = Vector2D(0, 0);
+        CRegion                             m_damage; // damage in buffer coords
+        bool                                m_shared = false, m_copied = false, m_failed = false;
+        bool                                m_copyInFlight  = false; // a dmabuf copy is issued and waiting on its fence
+        bool                                m_overlayCursor = true;
+        bool                                m_isFirst       = false;
 
         //
         void copy();
@@ -200,6 +207,7 @@ namespace Screenshare {
 
         void render(Render::CRenderContext& ctx);
         void renderMonitor(Render::CRenderContext& ctx);
+        void renderMonitorScene(Render::CRenderContext& ctx);
         void renderMonitorRegion(Render::CRenderContext& ctx);
         void renderWindow(Render::CRenderContext& ctx);
         void renderWorkspace(Render::CRenderContext& ctx);

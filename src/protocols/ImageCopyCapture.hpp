@@ -5,6 +5,7 @@
 #include "../defines.hpp"
 #include "../helpers/signal/Signal.hpp"
 #include "../helpers/Format.hpp"
+#include "../helpers/cm/ColorManagement.hpp"
 #include "WaylandProtocol.hpp"
 #include "ImageCaptureSource.hpp"
 #include "ext-image-copy-capture-v1.hpp"
@@ -37,6 +38,7 @@ class CImageCopyCaptureFrame {
     CRegion                            m_clientDamage;
 
     friend class CImageCopyCaptureSession;
+    friend class CImageCopyCaptureProtocol;
 };
 
 class CImageCopyCaptureSession {
@@ -93,9 +95,11 @@ class CImageCopyCaptureCursorSession {
     Vector2D                             m_bufferSize = Vector2D(0, 0);
 
     // frame stuff
-    SP<CExtImageCopyCaptureFrameV1> m_frameResource;
-    bool                            m_captured = false;
-    SP<IHLBuffer>                   m_buffer;
+    SP<CExtImageCopyCaptureFrameV1>     m_frameResource;
+    bool                                m_captured = false;
+    SP<IHLBuffer>                       m_buffer;
+
+    NColorManagement::PImageDescription m_imageDescription;
 
     struct {
         CHyprSignalListener constraintsChanged;
@@ -108,6 +112,8 @@ class CImageCopyCaptureCursorSession {
     void createFrame(SP<CExtImageCopyCaptureFrameV1> resource);
     void destroyCaptureSession();
     void sendConstraints();
+
+    friend class CImageCopyCaptureProtocol;
 };
 
 class CImageCopyCaptureProtocol : public IWaylandProtocol {
@@ -116,10 +122,17 @@ class CImageCopyCaptureProtocol : public IWaylandProtocol {
 
     virtual void bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id);
 
-    void         destroyResource(CExtImageCopyCaptureManagerV1* resource);
-    void         destroyResource(CImageCopyCaptureSession* resource);
-    void         destroyResource(CImageCopyCaptureCursorSession* resource);
-    void         destroyResource(CImageCopyCaptureFrame* resource);
+    enum eDescriptionResult : uint8_t {
+        DESCRIPTION_SET,
+        DESCRIPTION_ALREADY_CAPTURED,
+        DESCRIPTION_INVALID_FRAME,
+    };
+    eDescriptionResult setFrameImageDescription(wl_resource* frame, NColorManagement::PImageDescription description);
+
+    void               destroyResource(CExtImageCopyCaptureManagerV1* resource);
+    void               destroyResource(CImageCopyCaptureSession* resource);
+    void               destroyResource(CImageCopyCaptureCursorSession* resource);
+    void               destroyResource(CImageCopyCaptureFrame* resource);
 
   private:
     std::vector<SP<CExtImageCopyCaptureManagerV1>>  m_managers;

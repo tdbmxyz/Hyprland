@@ -816,7 +816,11 @@ void CHyprOpenGLImpl::end(CRenderContext& ctx) {
             setViewport(0, 0, TARGET_SIZE.x, TARGET_SIZE.y);
 
             blend(false);
-            renderTexturePrimitive(ctx, TEXTURE, CBox{{}, TARGET_SIZE});
+            if (ctx.m_renderingCapture && TEXTURE->m_imageDescription && ctx.m_data.outFB->imageDescription() &&
+                TEXTURE->m_imageDescription->needsCM(ctx.m_data.outFB->imageDescription()))
+                renderTexture(ctx, TEXTURE, CBox{{}, TARGET_SIZE}, {});
+            else
+                renderTexturePrimitive(ctx, TEXTURE, CBox{{}, TARGET_SIZE});
             blend(true);
         } else {
             CBox monbox = {0, 0, m_renderData.pMonitor->m_transformedSize.x, m_renderData.pMonitor->m_transformedSize.y};

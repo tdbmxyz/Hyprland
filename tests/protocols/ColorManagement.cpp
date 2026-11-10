@@ -29,7 +29,7 @@ class CColorManagementTest : public ::testing::Test {
                           bool luminancesFirst = false);
     void expectLuminances(PImageDescription description, float min, uint32_t max, uint32_t reference);
 
-  private:
+  protected:
     std::unique_ptr<wl_display, decltype(&wl_display_destroy)> m_display{nullptr, wl_display_destroy};
     CFileDescriptor                                            m_socket;
     wl_client*                                                 m_client           = nullptr; // Owned by m_display.
@@ -111,18 +111,19 @@ void CColorManagementTest::readDescription(uint32_t id, PImageDescription& descr
         const auto opcode = header[1] & 0xFFFFU;
         ASSERT_FALSE(header[0] == 1 && opcode == 0) << "Wayland protocol error";
         ASSERT_GE(size, sizeof(header));
-        ASSERT_LE(size, sizeof(header) + sizeof(uint32_t));
+        ASSERT_LE(size, sizeof(header) + 2 * sizeof(uint32_t));
         ASSERT_EQ(size % sizeof(uint32_t), 0U);
 
-        std::array<uint32_t, 1> payload = {};
+        std::array<uint32_t, 2> payload = {};
         ASSERT_NO_FATAL_FAILURE(readExact(std::as_writable_bytes(std::span{payload}).first(size - sizeof(header))));
         if (header[0] != id)
             continue;
 
-        ASSERT_EQ(opcode, 1U) << "Expected image description ready";
-        ASSERT_EQ(size, sizeof(header) + sizeof(uint32_t));
-        ASSERT_NE(payload[0], 0U);
-        description = CImageDescription::from(sc<uint64_t>(payload[0]));
+        ASSERT_TRUE(opcode == 1U || opcode == 2U) << "Expected image description ready/ready2";
+        ASSERT_EQ(size, sizeof(header) + (opcode == 1U ? 1U : 2U) * sizeof(uint32_t));
+        const auto identity = opcode == 1U ? sc<uint64_t>(payload[0]) : (sc<uint64_t>(payload[0]) << 32) | payload[1];
+        ASSERT_NE(identity, 0U);
+        description = CImageDescription::from(identity);
         ASSERT_TRUE(description);
         return;
     }
@@ -188,6 +189,53 @@ void CColorManagementTest::expectLuminances(PImageDescription description, float
     EXPECT_FLOAT_EQ(settings.getTFMinLuminance(), min);
     EXPECT_FLOAT_EQ(settings.getTFMaxLuminance(), max);
     EXPECT_FLOAT_EQ(settings.getTFRefLuminance(), reference);
+}
+
+TEST_F(CColorManagementTest, ReferencesPreserveDescriptionAndSurviveIndependentObjectDestruction) {
+    PROTO::colorManagement->bindManager(m_client, nullptr, 3, 3);
+    const auto original = DEFAULT_HDR_IMAGE_DESCRIPTION;
+    PROTO::colorManagement->createImageDescriptionReference(m_client, 4, original);
+    ASSERT_NE(wl_client_get_object(m_client, 4), nullptr);
+    ASSERT_NO_FATAL_FAILURE(sendRequest({3, (16U << 16) | 7U, 5, 4}));
+    PImageDescription description;
+    ASSERT_NO_FATAL_FAILURE(readDescription(5, description));
+    EXPECT_EQ(description, original);
+    const auto resource = wl_client_get_object(m_client, 5);
+    ASSERT_NE(resource, nullptr);
+    const auto state = CColorManagementImageDescription::fromReference(resource);
+    ASSERT_TRUE(state);
+    EXPECT_EQ(state->m_settings, original);
+
+    // Destroying the reference must not invalidate the resolved image.
+    ASSERT_NO_FATAL_FAILURE(sendRequest({4, 8U << 16}));
+    EXPECT_EQ(wl_client_get_object(m_client, 4), nullptr);
+    EXPECT_EQ(state->m_settings, original);
+
+    // The resolved image remains queryable (the capture extension promises this).
+    ASSERT_NO_FATAL_FAILURE(sendRequest({5, (12U << 16) | 1U, 6}));
+    wl_display_flush_clients(m_display.get());
+    bool done = false;
+    for (size_t event = 0; event < 32 && !done; ++event) {
+        std::array<uint32_t, 2> header = {};
+        ASSERT_NO_FATAL_FAILURE(readExact(std::as_writable_bytes(std::span{header})));
+        const auto size = header[1] >> 16;
+        ASSERT_FALSE(header[0] == 1 && (header[1] & 0xFFFFU) == 0) << "get_information failed";
+        ASSERT_GE(size, sizeof(header));
+        std::array<std::byte, 128> payload = {};
+        ASSERT_LE(size - sizeof(header), payload.size());
+        ASSERT_NO_FATAL_FAILURE(readExact(std::span{payload}.first(size - sizeof(header))));
+        done = header[0] == 6 && (header[1] & 0xFFFFU) == 0;
+    }
+    EXPECT_TRUE(done);
+}
+
+TEST_F(CColorManagementTest, InertReferenceCreatesFailedDescriptionRatherThanReusingAnotherColor) {
+    PROTO::colorManagement->bindManager(m_client, nullptr, 3, 3);
+    PROTO::colorManagement->createImageDescriptionReference(m_client, 4, {});
+    ASSERT_NO_FATAL_FAILURE(sendRequest({3, (16U << 16) | 7U, 5, 4}));
+    const auto state = CColorManagementImageDescription::fromReference(wl_client_get_object(m_client, 5));
+    ASSERT_TRUE(state);
+    EXPECT_FALSE(state->m_settings);
 }
 
 TEST_F(CColorManagementTest, OmittedLinearLuminancesUseSDRDefaults) {

@@ -24,6 +24,11 @@
 #include <output/MonitorResources.hpp>
 #include <pointer/PointerManager.hpp>
 #include <protocols/LayerShell.hpp>
+#include <protocols/ColorManagement.hpp>
+#include <protocols/ImageCaptureSource.hpp>
+#include <protocols/ImageCaptureColorManagement.hpp>
+#include <protocols/ImageCopyCapture.hpp>
+#include <protocols/LinuxDMABUF.hpp>
 #include <protocols/LockNotify.hpp>
 #include <protocols/PresentationTime.hpp>
 #include <protocols/SessionLock.hpp>
@@ -39,6 +44,8 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cmath>
+#include <cstdlib>
 #include <memory>
 #include <sys/socket.h>
 #include <thread>
@@ -245,6 +252,12 @@ class CSessionTestRenderer : public Render::IHyprRenderer {
   public:
     using IHyprRenderer::createTexture;
 
+    bool                                     m_supportsFP16               = false;
+    DRMFormat                                m_expectedFormat             = DRM_FORMAT_ARGB8888;
+    NColorManagement::PImageDescription      m_expectedDescription        = NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION;
+    DRMFormat                                m_expectedWorkingFormat      = DRM_FORMAT_ARGB8888;
+    NColorManagement::PImageDescription      m_expectedWorkingDescription = NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION;
+
     UP<CSessionTestElements>                 m_elements = makeUnique<CSessionTestElements>();
     int                                      m_begins = 0, m_ends = 0;
     int                                      m_dmaBegins = 0, m_unbinds = 0, m_passStarts = 0;
@@ -306,7 +319,7 @@ class CSessionTestRenderer : public Render::IHyprRenderer {
         return false;
     }
     bool fp16Supported() override {
-        return false;
+        return m_supportsFP16;
     }
     std::vector<SDRMFormat> getDRMFormats() override {
         return {};
@@ -376,8 +389,8 @@ class CSessionTestRenderer : public Render::IHyprRenderer {
     }
     void expectCaptureTarget(Render::CRenderContext& ctx) {
         ASSERT_TRUE(ctx.m_data.outFB);
-        EXPECT_EQ(ctx.m_data.outFB->imageDescription(), NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION);
-        EXPECT_EQ(ctx.m_data.outFB->m_drmFormat, DRM_FORMAT_ARGB8888);
+        EXPECT_EQ(ctx.m_data.outFB->imageDescription(), m_expectedDescription);
+        EXPECT_EQ(ctx.m_data.outFB->m_drmFormat, m_expectedFormat);
     }
     void prepareTarget(Render::CRenderContext& ctx, PHLMONITOR monitor, CRegion& damage, SP<Render::IFramebuffer> fb, bool simple) {
         EXPECT_TRUE(ctx.active());
@@ -388,17 +401,17 @@ class CSessionTestRenderer : public Render::IHyprRenderer {
         EXPECT_NE(ctx.sceneResources(), monitor->resources()->sceneResources());
         ASSERT_TRUE(ctx.sceneResources()->bufferDescription());
         const auto& description = *ctx.sceneResources()->bufferDescription();
-        EXPECT_EQ(description.format, DRM_FORMAT_ARGB8888);
-        EXPECT_EQ(description.imageDescription, NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION);
+        EXPECT_EQ(description.format, m_expectedWorkingFormat);
+        EXPECT_EQ(description.imageDescription, m_expectedWorkingDescription);
         ASSERT_TRUE(ctx.sceneResources()->blurFramebuffer());
-        EXPECT_EQ(ctx.sceneResources()->blurFramebuffer()->m_drmFormat, DRM_FORMAT_ARGB8888);
-        EXPECT_EQ(ctx.sceneResources()->blurFramebuffer()->imageDescription(), NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION);
+        EXPECT_EQ(ctx.sceneResources()->blurFramebuffer()->m_drmFormat, m_expectedWorkingFormat);
+        EXPECT_EQ(ctx.sceneResources()->blurFramebuffer()->imageDescription(), m_expectedWorkingDescription);
         m_resources.emplace_back(ctx.sceneResources());
         ++m_begins;
         // Keep output and working FB distinct so setting only currentFB's
         // description cannot accidentally satisfy the DMA output assertion.
         ctx.m_data.currentFB = ctx.m_data.mainFB = makeShared<CSessionTestFramebuffer>();
-        ctx.m_data.currentFB->alloc(monitor->m_transformedSize.x, monitor->m_transformedSize.y, DRM_FORMAT_ARGB8888);
+        ctx.m_data.currentFB->alloc(monitor->m_transformedSize.x, monitor->m_transformedSize.y, description.format);
         ctx.m_data.currentFB->setImageDescription(description.imageDescription);
         ctx.m_data.outFB  = fb;
         ctx.m_data.fbSize = monitor->m_transformedSize;
@@ -794,14 +807,35 @@ class CWorkspaceCaptureFrameTest : public CWorkspaceCaptureSessionTest {
     uint32_t   m_nextID = 2;
 
   private:
-    bool                            m_installedFrameGlobals = false;
-    Hyprutils::OS::CFileDescriptor  m_socket;
+    bool m_installedFrameGlobals = false;
+
+  protected:
+    Hyprutils::OS::CFileDescriptor m_socket;
+
+  private:
     UP<State::CMonitorStateTracker> m_previousMonitors;
     UP<CDynamicPermissionManager>   m_previousPermissions;
     UP<CSessionLockManager>         m_previousSessionLock;
     UP<CSessionLockProtocol>        m_previousLockProtocol;
     UP<Desktop::CFadingOutState>    m_previousFadeouts;
 };
+
+TEST_F(CWorkspaceCaptureFrameTest, MissingPermissionDialogDeniesInsteadOfCrashingOrAllowing) {
+    const auto*               oldPathValue = std::getenv("PATH");
+    const auto                oldPath      = oldPathValue ? std::optional<std::string>{oldPathValue} : std::nullopt;
+    const Render::CScopeGuard restorePath([&] {
+        if (oldPath)
+            setenv("PATH", oldPath->c_str(), 1);
+        else
+            unsetenv("PATH");
+    });
+    ASSERT_EQ(setenv("PATH", "/nonexistent-hdr-permission-test", 1), 0);
+    *CConfigValue<Config::INTEGER>("ecosystem:enforce_permissions").ptr() = 1;
+    g_pDynamicPermissionManager->addConfigPermissionRule(".*", PERMISSION_TYPE_SCREENCOPY, PERMISSION_RULE_ALLOW_MODE_ASK);
+    EXPECT_EQ(g_pDynamicPermissionManager->clientPermissionMode(m_client, PERMISSION_TYPE_SCREENCOPY), PERMISSION_RULE_ALLOW_MODE_DENY);
+    EXPECT_EQ(g_pDynamicPermissionManager->clientPermissionMode(m_client, PERMISSION_TYPE_SCREENCOPY), PERMISSION_RULE_ALLOW_MODE_DENY);
+    EXPECT_EQ(g_pDynamicPermissionManager->clientPermissionModeWithString(-3, "hdr-capture-test", PERMISSION_TYPE_PLUGIN), PERMISSION_RULE_ALLOW_MODE_DENY);
+}
 
 TEST_F(CWorkspaceCaptureFrameTest, EmptyAndRemovedFramesClearTransparentWithoutCopyFB) {
     for (const auto mode : {0U, 1U}) {
@@ -961,6 +995,334 @@ TEST_F(CWorkspaceCaptureFrameTest, DmaAndShmRetainSessionOwnedSRGBResourcesThrou
 
     first.reset();
     EXPECT_TRUE(firstResources.expired());
+}
+
+class CColorManagedCaptureFrameTest : public CWorkspaceCaptureFrameTest {
+  protected:
+    void SetUp() override {
+        CWorkspaceCaptureFrameTest::SetUp();
+        if (HasFatalFailure())
+            return;
+        renderer().m_supportsFP16               = true;
+        renderer().m_expectedFormat             = DRM_FORMAT_XBGR2101010;
+        renderer().m_expectedDescription        = NColorManagement::DEFAULT_HDR_IMAGE_DESCRIPTION;
+        renderer().m_expectedWorkingFormat      = DRM_FORMAT_ABGR16161616F;
+        renderer().m_expectedWorkingDescription = NColorManagement::CImageDescription::from(NColorManagement::SImageDescription{
+            .transferFunction = NColorManagement::CM_TRANSFER_FUNCTION_LINEAR,
+            .primariesNameSet = true,
+            .primariesNamed   = NColorManagement::CM_PRIMARIES_BT2020,
+            .primaries        = NColorManagement::NColorPrimaries::BT2020,
+            .luminances       = {.min = 0, .max = 10000, .reference = 203},
+        });
+    }
+};
+
+TEST_F(CColorManagedCaptureFrameTest, ExplicitFramesUseFP16SceneAndPQTargetsForShmAndDma) {
+    auto session = Screenshare::mgr()->newSession(m_client, source());
+    ASSERT_TRUE(session);
+    // Ten-bit capture capability does not change legacy session constraints.
+    EXPECT_EQ(session->allowedFormats(), (std::vector<DRMFormat>{DRM_FORMAT_ARGB8888}));
+    EXPECT_TRUE(std::ranges::contains(session->colorManagedFormats(), DRM_FORMAT_XBGR2101010));
+    for (const bool dma : {false, true}) {
+        auto target = buffer(session->bufferSize(), DRM_FORMAT_XBGR2101010, dma);
+        auto frame  = session->nextFrame(false);
+        EXPECT_FALSE(frame->usesSceneCapture());
+        ASSERT_TRUE(frame->setImageDescription(NColorManagement::DEFAULT_HDR_IMAGE_DESCRIPTION));
+        EXPECT_TRUE(frame->usesSceneCapture());
+        std::vector<Screenshare::eScreenshareResult> results;
+        ASSERT_EQ(frame->share(target, {}, [&](auto result) { results.push_back(result); }), Screenshare::ERROR_NONE);
+        EXPECT_FALSE(frame->setImageDescription(NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION));
+        EXPECT_FALSE(Screenshare::mgr()->outputNeedsCopyFB(m_monitor));
+        Screenshare::mgr()->onOutputCommit(m_monitor, false);
+        EXPECT_TRUE(frame->done());
+        EXPECT_EQ(results, (std::vector<Screenshare::eScreenshareResult>{Screenshare::RESULT_TIMESTAMP, Screenshare::RESULT_COPIED}));
+        EXPECT_EQ(target->m_readbacks.size(), dma ? 0U : 1U);
+        EXPECT_FALSE(renderer().context().active());
+    }
+    ASSERT_EQ(renderer().m_resources.size(), 2U);
+    EXPECT_EQ(renderer().m_resources[0], renderer().m_resources[1]);
+    EXPECT_FALSE(m_monitor->resources()->hasMirrorFB());
+
+    // A subsequent untagged frame in the very same session stays legacy SDR.
+    renderer().m_expectedFormat = renderer().m_expectedWorkingFormat = DRM_FORMAT_ARGB8888;
+    renderer().m_expectedDescription = renderer().m_expectedWorkingDescription = NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION;
+    capture(*session);
+    EXPECT_NE(renderer().m_resources.back(), renderer().m_resources.front());
+}
+
+TEST_F(CColorManagedCaptureFrameTest, SDRWhiteAndPQHighlightsRetainTheirLuminanceInTheWorkingSpace) {
+    using namespace NColorManagement;
+    m_monitor->m_imageDescription = DEFAULT_HDR_IMAGE_DESCRIPTION;
+    m_monitor->m_sdrMinLuminance  = 0;
+    m_monitor->m_sdrMaxLuminance  = 160;
+    Render::CRenderContext ctx;
+    ASSERT_TRUE(ctx.begin());
+    ctx.m_data.pMonitor    = m_monitor;
+    ctx.m_renderingCapture = true;
+    const auto work        = renderer().m_expectedWorkingDescription;
+    const auto sdrSettings = renderer().getCMSettings(ctx, DEFAULT_SRGB_IMAGE_DESCRIPTION, work, nullptr, true, 0, 160);
+    const auto white       = convertColor(CHyprColor{1, 1, 1, 1}, DEFAULT_SRGB_IMAGE_DESCRIPTION, work, sdrSettings);
+    EXPECT_NEAR(white.r, 160.0, 1e-5);
+    EXPECT_NEAR(white.g, white.r, 1e-7);
+    EXPECT_NEAR(white.b, white.r, 1e-7);
+
+    const auto pq = [](double nits) {
+        const auto power = std::pow(nits / 10000, 2610.0 / 16384);
+        return std::pow((3424.0 / 4096 + 2413.0 / 128 * power) / (1 + 2392.0 / 128 * power), 2523.0 / 32);
+    };
+    const auto toWork = renderer().getCMSettings(ctx, DEFAULT_HDR_IMAGE_DESCRIPTION, work, nullptr, true, 0, 160);
+    const auto toPQ   = renderer().getCMSettings(ctx, work, DEFAULT_HDR_IMAGE_DESCRIPTION, nullptr, true, 0, 160);
+    for (const auto nits : {203.0, 400.0, 1000.0, 4000.0, 10000.0}) {
+        const auto code   = pq(nits);
+        const auto linear = convertColor(CHyprColor{code, code, code, 1}, DEFAULT_HDR_IMAGE_DESCRIPTION, work, toWork);
+        const auto result = convertColor(linear, work, DEFAULT_HDR_IMAGE_DESCRIPTION, toPQ);
+        EXPECT_NEAR(linear.r, nits, 0.01);
+        EXPECT_NEAR(result.r, code, 1e-6);
+        EXPECT_NEAR(result.g, code, 1e-6);
+        EXPECT_NEAR(result.b, code, 1e-6);
+    }
+}
+
+TEST_F(CColorManagedCaptureFrameTest, HalfFloatWorkingStoragePreservesEveryNeutralPQ10Code) {
+    using namespace NColorManagement;
+    Render::CRenderContext ctx;
+    ASSERT_TRUE(ctx.begin());
+    ctx.m_data.pMonitor    = m_monitor;
+    ctx.m_renderingCapture = true;
+    const auto work        = renderer().m_expectedWorkingDescription;
+    const auto toWork      = renderer().getCMSettings(ctx, DEFAULT_HDR_IMAGE_DESCRIPTION, work, nullptr, true, 0, 160);
+    const auto toPQ        = renderer().getCMSettings(ctx, work, DEFAULT_HDR_IMAGE_DESCRIPTION, nullptr, true, 0, 160);
+    const auto halfFloat   = [](double value) {
+        // Binary16 has ten fraction bits and a 2^-24 subnormal step. This
+        // positive finite reference avoids requiring optional std::float16_t.
+        int exponent = 0;
+        std::frexp(value, &exponent);
+        const auto step = std::ldexp(1.0, std::max(exponent - 11, -24));
+        return std::nearbyint(value / step) * step;
+    };
+    for (uint32_t code = 0; code < 1024; ++code) {
+        const auto normalized = code / 1023.0;
+        const auto linear     = convertColor(CHyprColor{normalized, normalized, normalized, 1}, DEFAULT_HDR_IMAGE_DESCRIPTION, work, toWork);
+        const auto quantized  = CHyprColor{halfFloat(linear.r), halfFloat(linear.g), halfFloat(linear.b), 1};
+        const auto result     = convertColor(quantized, work, DEFAULT_HDR_IMAGE_DESCRIPTION, toPQ);
+        EXPECT_EQ(std::lround(result.r * 1023), code) << "PQ10 code " << code;
+        EXPECT_EQ(std::lround(result.g * 1023), code);
+        EXPECT_EQ(std::lround(result.b * 1023), code);
+    }
+}
+
+TEST_F(CColorManagedCaptureFrameTest, PendingPermissionDoesNotRenderOrCopyUntilGranted) {
+    auto session = Screenshare::mgr()->newSession(m_client, source());
+    ASSERT_TRUE(session);
+    auto frame = session->nextFrame(false);
+    ASSERT_TRUE(frame->setImageDescription(NColorManagement::DEFAULT_HDR_IMAGE_DESCRIPTION));
+    *CConfigValue<Config::INTEGER>("ecosystem:enforce_permissions").ptr() = 1;
+    g_pDynamicPermissionManager->addConfigPermissionRule(".*", PERMISSION_TYPE_SCREENCOPY, PERMISSION_RULE_ALLOW_MODE_PENDING);
+    std::vector<Screenshare::eScreenshareResult> results;
+    ASSERT_EQ(frame->share(buffer(session->bufferSize(), DRM_FORMAT_XBGR2101010), {}, [&](auto result) { results.push_back(result); }), Screenshare::ERROR_NONE);
+    Screenshare::mgr()->onOutputCommit(m_monitor, false);
+    EXPECT_EQ(renderer().m_begins, 0);
+    EXPECT_FALSE(frame->done());
+    EXPECT_EQ(results, (std::vector<Screenshare::eScreenshareResult>{Screenshare::RESULT_TIMESTAMP}));
+    g_pDynamicPermissionManager->clearConfigPermissions();
+    g_pDynamicPermissionManager->addConfigPermissionRule(".*", PERMISSION_TYPE_SCREENCOPY, PERMISSION_RULE_ALLOW_MODE_ALLOW);
+    Screenshare::mgr()->onOutputCommit(m_monitor, false);
+    EXPECT_TRUE(frame->done());
+    EXPECT_EQ(results.back(), Screenshare::RESULT_COPIED);
+    EXPECT_EQ(renderer().m_begins, 1);
+}
+
+TEST_F(CColorManagedCaptureFrameTest, PQNeverFallsBackToEightBitOrUnavailableFP16) {
+    auto session = Screenshare::mgr()->newSession(m_client, source());
+    ASSERT_TRUE(session);
+    auto frame = session->nextFrame(false);
+    ASSERT_TRUE(frame->setImageDescription(NColorManagement::DEFAULT_HDR_IMAGE_DESCRIPTION));
+    const auto callback = [](auto) { ADD_FAILURE() << "Rejected frame must not be submitted"; };
+    EXPECT_EQ(frame->share(buffer(session->bufferSize()), {}, callback), Screenshare::ERROR_BUFFER_FORMAT);
+    renderer().m_supportsFP16 = false;
+    EXPECT_EQ(frame->share(buffer(session->bufferSize(), DRM_FORMAT_XBGR2101010), {}, callback), Screenshare::ERROR_UNKNOWN);
+    EXPECT_EQ(renderer().m_begins, 0);
+    EXPECT_FALSE(frame->done());
+}
+
+TEST_F(CColorManagedCaptureFrameTest, UntaggedFramesDoNotGainHDRFromTenBitStorage) {
+    auto session = Screenshare::mgr()->newSession(m_client, source());
+    ASSERT_TRUE(session);
+    auto frame = session->nextFrame(false);
+    EXPECT_FALSE(frame->usesSceneCapture());
+    EXPECT_EQ(frame->share(buffer(session->bufferSize(), DRM_FORMAT_XBGR2101010), {}, [](auto) {}), Screenshare::ERROR_BUFFER_FORMAT);
+    EXPECT_FALSE(frame->setImageDescription({}));
+}
+
+TEST_F(CColorManagedCaptureFrameTest, SizeChangeAfterSubmissionFailsBeforeRendering) {
+    auto session = Screenshare::mgr()->newSession(m_client, source());
+    ASSERT_TRUE(session);
+    auto frame = session->nextFrame(false);
+    ASSERT_TRUE(frame->setImageDescription(NColorManagement::DEFAULT_HDR_IMAGE_DESCRIPTION));
+    std::vector<Screenshare::eScreenshareResult> results;
+    ASSERT_EQ(frame->share(buffer(session->bufferSize(), DRM_FORMAT_XBGR2101010), {}, [&](auto result) { results.push_back(result); }), Screenshare::ERROR_NONE);
+    m_monitor->m_transformedSize = {800, 600};
+    m_monitor->m_events.modeChanged.emit();
+    Screenshare::mgr()->onOutputCommit(m_monitor, false);
+    EXPECT_TRUE(frame->done());
+    EXPECT_EQ(results, (std::vector<Screenshare::eScreenshareResult>{Screenshare::RESULT_NOT_COPIED}));
+    EXPECT_EQ(renderer().m_begins, 0);
+}
+
+TEST_F(CWorkspaceCaptureFrameTest, ExtendedConstraintsStillAllowUntaggedTenBitSDRCopies) {
+    auto session = Screenshare::mgr()->newSession(m_client, source());
+    ASSERT_TRUE(session);
+    session->enableExtendedFormats();
+    ASSERT_TRUE(std::ranges::contains(session->allowedFormats(), DRM_FORMAT_XBGR2101010));
+    m_monitor->m_transformedSize = {640, 360};
+    m_monitor->m_events.modeChanged.emit();
+    EXPECT_TRUE(std::ranges::contains(session->allowedFormats(), DRM_FORMAT_XBGR2101010));
+    auto target = buffer(session->bufferSize(), DRM_FORMAT_XBGR2101010);
+    auto frame  = session->nextFrame(false);
+    EXPECT_FALSE(frame->usesSceneCapture());
+    renderer().m_expectedFormat = DRM_FORMAT_XBGR2101010;
+    std::vector<Screenshare::eScreenshareResult> results;
+    ASSERT_EQ(frame->share(target, {}, [&](auto result) { results.push_back(result); }), Screenshare::ERROR_NONE);
+    Screenshare::mgr()->onOutputCommit(m_monitor, false);
+    EXPECT_TRUE(frame->done());
+    EXPECT_EQ(results.back(), Screenshare::RESULT_COPIED);
+    EXPECT_FALSE(renderer().m_supportsFP16);
+}
+
+class CImageCaptureColorProtocolTest : public CWorkspaceCaptureFrameTest {
+  protected:
+    void SetUp() override {
+        CWorkspaceCaptureFrameTest::SetUp();
+        if (HasFatalFailure())
+            return;
+        m_previousColor                    = std::move(PROTO::colorManagement);
+        m_previousSource                   = std::move(PROTO::imageCaptureSource);
+        m_previousCopy                     = std::move(PROTO::imageCopyCapture);
+        m_previousCaptureColor             = std::move(PROTO::imageCaptureColorManagement);
+        m_previousDma                      = std::move(PROTO::linuxDma);
+        m_installed                        = true;
+        PROTO::colorManagement             = makeUnique<CColorManagementProtocol>(&wp_color_manager_v1_interface, 3, "capture-color-test");
+        PROTO::imageCaptureSource          = makeUnique<CImageCaptureSourceProtocol>();
+        PROTO::imageCopyCapture            = makeUnique<CImageCopyCaptureProtocol>(&ext_image_copy_capture_manager_v1_interface, 1, "capture-copy-test");
+        PROTO::imageCaptureColorManagement = makeUnique<CImageCaptureColorManagementProtocol>(&xx_image_capture_color_manager_v1_interface, 1, "capture-color-extension-test");
+        PROTO::linuxDma                    = makeUnique<CLinuxDMABufV1Protocol>(&zwp_linux_dmabuf_v1_interface, 5, "capture-dma-test");
+        m_monitor->m_imageDescription      = NColorManagement::DEFAULT_HDR_IMAGE_DESCRIPTION;
+        renderer().m_supportsFP16          = true;
+        m_sourceWire                       = makeShared<CExtImageCaptureSourceV1>(m_client, 1, m_nextID++);
+        m_source                           = makeShared<CImageCaptureSource>(m_sourceWire, m_monitor);
+        m_source->m_self                   = m_source;
+        // This fixture owns the source instead of the protocol's source vector.
+        m_sourceWire->setOnDestroy([](CExtImageCaptureSourceV1*) {});
+        PROTO::imageCaptureColorManagement->bindManager(m_client, nullptr, 1, m_nextID++);
+        PROTO::colorManagement->bindManager(m_client, nullptr, 3, m_nextID++);
+        PROTO::imageCopyCapture->bindManager(m_client, nullptr, 1, m_nextID++);
+        ASSERT_EQ(m_nextID, 6U);
+    }
+    void TearDown() override {
+        if (m_display)
+            wl_display_destroy_clients(m_display.get());
+        m_source.reset();
+        m_sourceWire.reset();
+        if (m_installed) {
+            PROTO::imageCaptureColorManagement = std::move(m_previousCaptureColor);
+            PROTO::imageCopyCapture            = std::move(m_previousCopy);
+            PROTO::imageCaptureSource          = std::move(m_previousSource);
+            PROTO::colorManagement             = std::move(m_previousColor);
+            PROTO::linuxDma                    = std::move(m_previousDma);
+        }
+        CWorkspaceCaptureFrameTest::TearDown();
+    }
+    void request(std::initializer_list<uint32_t> words) {
+        const auto size = words.size() * sizeof(uint32_t);
+        ASSERT_EQ(send(m_socket.get(), words.begin(), size, MSG_NOSIGNAL | MSG_DONTWAIT), sc<ssize_t>(size));
+        ASSERT_EQ(wl_event_loop_dispatch(wl_display_get_event_loop(m_display.get()), 0), 0);
+    }
+    NColorManagement::PImageDescription description(uint32_t id) {
+        auto state = CColorManagementImageDescription::fromReference(wl_client_get_object(m_client, id));
+        return state ? state->m_settings : NColorManagement::PImageDescription{};
+    }
+    uint32_t readError() {
+        wl_display_flush_clients(m_display.get());
+        for (size_t event = 0; event < 128; ++event) {
+            std::array<uint32_t, 2> header = {};
+            if (recv(m_socket.get(), header.data(), sizeof(header), MSG_DONTWAIT | MSG_WAITALL) != sizeof(header))
+                return 0;
+            const auto                size    = header[1] >> 16;
+            std::array<uint32_t, 128> payload = {};
+            if (size < sizeof(header) || size - sizeof(header) > sizeof(payload))
+                return 0;
+            const auto bytes = size - sizeof(header);
+            if (recv(m_socket.get(), payload.data(), bytes, MSG_DONTWAIT | MSG_WAITALL) != sc<ssize_t>(bytes))
+                return 0;
+            if (header[0] == 1 && (header[1] & 0xFFFFU) == 0)
+                return payload[1];
+        }
+        return 0;
+    }
+
+    SP<CExtImageCaptureSourceV1> m_sourceWire;
+    SP<CImageCaptureSource>      m_source;
+
+  private:
+    bool                                     m_installed = false;
+    UP<CColorManagementProtocol>             m_previousColor;
+    UP<CImageCaptureSourceProtocol>          m_previousSource;
+    UP<CImageCopyCaptureProtocol>            m_previousCopy;
+    UP<CImageCaptureColorManagementProtocol> m_previousCaptureColor;
+    UP<CLinuxDMABufV1Protocol>               m_previousDma;
+};
+
+TEST_F(CImageCaptureColorProtocolTest, SourceDestructionDoesNotDestroyColorsAndReferencesAreImmutable) {
+    ASSERT_NO_FATAL_FAILURE(request({3, (16U << 16) | 1U, 6, 2}));
+    ASSERT_NO_FATAL_FAILURE(request({6, (12U << 16) | 1U, 7}));
+    ASSERT_NO_FATAL_FAILURE(request({4, (16U << 16) | 7U, 8, 7}));
+    EXPECT_EQ(description(8), NColorManagement::DEFAULT_HDR_IMAGE_DESCRIPTION);
+    wl_resource_destroy(m_sourceWire->resource());
+    m_source.reset();
+    m_monitor->m_imageDescription = NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION;
+    PROTO::colorManagement->onMonitorImageDescriptionChanged(m_monitor);
+    ASSERT_NO_FATAL_FAILURE(request({6, (12U << 16) | 1U, 9}));
+    ASSERT_NO_FATAL_FAILURE(request({4, (16U << 16) | 7U, 10, 9}));
+    EXPECT_EQ(description(8), NColorManagement::DEFAULT_HDR_IMAGE_DESCRIPTION);
+    EXPECT_EQ(description(10), NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION);
+    m_monitor->m_events.disconnect.emit();
+    ASSERT_NO_FATAL_FAILURE(request({6, (12U << 16) | 1U, 11}));
+    ASSERT_NO_FATAL_FAILURE(request({4, (16U << 16) | 7U, 12, 11}));
+    EXPECT_FALSE(description(12));
+}
+
+TEST_F(CImageCaptureColorProtocolTest, AlreadyRemovedWorkspaceSourceStartsInert) {
+    m_source         = makeShared<CImageCaptureSource>(m_sourceWire, PHLWORKSPACE{m_workspace}, 0);
+    m_source->m_self = m_source;
+    m_sourceWire->setOnDestroy([](CExtImageCaptureSourceV1*) {});
+    m_workspace.reset();
+    ASSERT_NO_FATAL_FAILURE(request({3, (16U << 16) | 1U, 6, 2}));
+    ASSERT_NO_FATAL_FAILURE(request({6, (12U << 16) | 1U, 7}));
+    ASSERT_NO_FATAL_FAILURE(request({4, (16U << 16) | 7U, 8, 7}));
+    EXPECT_FALSE(description(8));
+}
+
+TEST_F(CImageCaptureColorProtocolTest, CannotChangeImageDescriptionAfterCaptureRequest) {
+    ASSERT_NO_FATAL_FAILURE(request({5, 20U << 16, 6, 2, 0}));
+    ASSERT_NO_FATAL_FAILURE(request({6, 12U << 16, 7}));
+    PROTO::colorManagement->createImageDescriptionReference(m_client, 8, NColorManagement::DEFAULT_HDR_IMAGE_DESCRIPTION);
+    ASSERT_NO_FATAL_FAILURE(request({4, (16U << 16) | 7U, 9, 8}));
+    ASSERT_NO_FATAL_FAILURE(request({3, (16U << 16) | 2U, 7, 9}));
+    m_nextID    = 10;
+    auto target = buffer(m_monitor->m_transformedSize, DRM_FORMAT_XBGR2101010);
+    ASSERT_NO_FATAL_FAILURE(request({7, (12U << 16) | 1U, 10}));
+    ASSERT_NO_FATAL_FAILURE(request({7, (8U << 16) | 3U}));
+    ASSERT_NO_FATAL_FAILURE(request({3, (16U << 16) | 2U, 7, 9}));
+    EXPECT_EQ(readError(), XX_IMAGE_CAPTURE_COLOR_MANAGER_V1_ERROR_ALREADY_CAPTURED);
+}
+
+TEST_F(CImageCaptureColorProtocolTest, FailedImageDescriptionCannotBeUsedForCapture) {
+    ASSERT_NO_FATAL_FAILURE(request({5, 20U << 16, 6, 2, 0}));
+    ASSERT_NO_FATAL_FAILURE(request({6, 12U << 16, 7}));
+    PROTO::colorManagement->createImageDescriptionReference(m_client, 8, {});
+    ASSERT_NO_FATAL_FAILURE(request({4, (16U << 16) | 7U, 9, 8}));
+    ASSERT_NO_FATAL_FAILURE(request({3, (16U << 16) | 2U, 7, 9}));
+    EXPECT_EQ(readError(), XX_IMAGE_CAPTURE_COLOR_MANAGER_V1_ERROR_IMAGE_DESCRIPTION_NOT_READY);
 }
 
 // Seed mapped state without emitting map signals, which arrange outputs and

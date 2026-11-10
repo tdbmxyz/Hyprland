@@ -34,7 +34,7 @@ void CScreenshareManager::onOutputCommit(PHLMONITOR monitor, bool copyFBPrepared
         if (frame->m_session->monitor() != monitor)
             return;
 
-        if (!copyFBPrepared && frame->m_session->m_type != SHARE_WORKSPACE)
+        if (!copyFBPrepared && !frame->usesSceneCapture() && frame->m_session->m_type != SHARE_WORKSPACE)
             return;
 
         if (frame->m_session->m_type == SHARE_WINDOW) {
@@ -194,7 +194,8 @@ bool CScreenshareManager::isOutputBeingSSd(PHLMONITOR monitor) {
 
 bool CScreenshareManager::isOutputDSBlocked(PHLMONITOR monitor) {
     if (std::ranges::any_of(m_pendingFrames, [monitor](const auto& frame) {
-            return frame && !frame->done() && frame->m_shared && frame->m_session->m_type == SHARE_WORKSPACE && frame->m_session->monitor() == monitor;
+            return frame && !frame->done() && frame->m_shared && (frame->usesSceneCapture() || frame->m_session->m_type == SHARE_WORKSPACE) &&
+                frame->m_session->monitor() == monitor;
         }))
         return true;
 
@@ -227,7 +228,7 @@ CScreenshareManager::SOutputCopyFBState CScreenshareManager::outputCopyFBState(P
     }
 
     for (const auto& frame : m_pendingFrames) {
-        if (!frame || frame->done() || !frame->m_shared || frame->m_session->monitor() != monitor)
+        if (!frame || frame->done() || !frame->m_shared || frame->usesSceneCapture() || frame->m_session->monitor() != monitor)
             continue;
 
         if (frame->m_session->m_type == SHARE_MONITOR) {

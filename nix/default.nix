@@ -128,7 +128,7 @@ customStdenv.mkDerivation (finalAttrs: {
             ../systemd
             ../VERSION
             (fs.fileFilter (file: file.hasExt "1") ../docs)
-            (fs.fileFilter (file: file.hasExt "conf" || file.hasExt "in" || file.hasExt "lua" ) ../example)
+            (fs.fileFilter (file: file.hasExt "conf" || file.hasExt "in" || file.hasExt "lua") ../example)
             (fs.fileFilter (file: file.hasExt "sh") ../scripts)
             (fs.fileFilter (file: file.name == "CMakeLists.txt") ../.)
             (optional withTests [
@@ -275,6 +275,8 @@ customStdenv.mkDerivation (finalAttrs: {
       install hyprtester/popup-render -t $out/bin
       install hyprtester/wlr-foreign-toplevel -t $out/bin
       install hyprtester/toplevel-capture -t $out/bin
+      install hyprtester/color-managed-capture -t $out/bin
+      install hyprtester/color-managed-source -t $out/bin
       install hyprland_gtests -t $out/bin
       install hyprtester/child-window -t $out/bin
     ''}

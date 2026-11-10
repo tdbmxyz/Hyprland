@@ -2124,7 +2124,8 @@ static bool isSDR2HDR(CRenderContext& ctx, const NColorManagement::SImageDescrip
             imageDescription.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_GAMMA22) &&
         (targetImageDescription.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_ST2084_PQ ||
          targetImageDescription.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_HLG ||
-         (targetImageDescription.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_EXT_LINEAR &&
+         ((targetImageDescription.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_EXT_LINEAR ||
+           (ctx.m_renderingCapture && targetImageDescription.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_LINEAR)) &&
           ctx.m_data.pMonitor->m_imageDescription->value().transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_ST2084_PQ));
 }
 

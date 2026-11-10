@@ -53,6 +53,7 @@
 #include "../protocols/HyprlandSurface.hpp"
 #include "../protocols/ImageCaptureSource.hpp"
 #include "../protocols/ImageCopyCapture.hpp"
+#include "../protocols/ImageCaptureColorManagement.hpp"
 #include "../protocols/BackgroundEffect.hpp"
 #include "../protocols/core/Seat.hpp"
 #include "../protocols/core/DataDevice.hpp"
@@ -236,6 +237,10 @@ CProtocolManager::CProtocolManager() {
     if (*PENABLECM)
         PROTO::colorManagement = makeUnique<CColorManagementProtocol>(&wp_color_manager_v1_interface, *PCMV1_2 ? 3 : 1, "ColorManagement", *PDEBUGCM);
 
+    static const auto PCAPTURECM = CConfigValue<Config::INTEGER>("experimental:xx_image_capture_color_management");
+    if (PROTO::colorManagement && *PCMV1_2 && *PCAPTURECM)
+        PROTO::imageCaptureColorManagement = makeUnique<CImageCaptureColorManagementProtocol>(&xx_image_capture_color_manager_v1_interface, 1, "ImageCaptureColorManagement");
+
     // ! please read the top of this file before adding another protocol
 
     for (auto const& b : g_pCompositor->m_aqBackend->getImplementations()) {
@@ -325,6 +330,7 @@ CProtocolManager::~CProtocolManager() {
     PROTO::inputCapture.reset();
     PROTO::hyprlandSurface.reset();
     PROTO::contentType.reset();
+    PROTO::imageCaptureColorManagement.reset();
     PROTO::colorManagement.reset();
     PROTO::xdgTag.reset();
     PROTO::xdgBell.reset();
