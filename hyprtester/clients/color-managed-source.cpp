@@ -54,6 +54,7 @@ struct SState {
     bool                                          descriptionReady = false;
     bool                                          failed           = false;
     bool                                          cursorEnabled    = false;
+    bool                                          sdrOnly          = false;
 };
 
 static uint32_t pq10(double nits) {
@@ -154,27 +155,32 @@ static bool bindGlobals(SState& state) {
 }
 
 static bool setup(SState& state) {
-    auto params = makeShared<CCWpImageDescriptionCreatorParamsV1>(state.color->sendCreateParametricCreator());
-    params->sendSetTfNamed(WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
-    params->sendSetPrimariesNamed(WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
-    params->sendSetLuminances(0, 10000, 203);
-    state.description = makeShared<CCWpImageDescriptionV1>(params->sendCreate());
-    state.description->setReady([&](CCWpImageDescriptionV1*, uint32_t) { state.descriptionReady = true; });
-    state.description->setReady2([&](CCWpImageDescriptionV1*, uint32_t, uint32_t) { state.descriptionReady = true; });
-    state.description->setFailed([&](CCWpImageDescriptionV1*, uint32_t, const char* message) {
-        std::println(stderr, "Image description failed: {}", message);
-        state.failed = true;
-    });
-    if (wl_display_roundtrip(state.display) < 0 || !state.descriptionReady)
-        return false;
-    state.surface      = makeShared<CCWlSurface>(state.compositor->sendCreateSurface());
-    state.colorSurface = makeShared<CCWpColorManagementSurfaceV1>(state.color->sendGetSurface(state.surface->resource()));
-    state.colorSurface->sendSetImageDescription(state.description.get(), WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
+    if (!state.sdrOnly) {
+        auto params = makeShared<CCWpImageDescriptionCreatorParamsV1>(state.color->sendCreateParametricCreator());
+        params->sendSetTfNamed(WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
+        params->sendSetPrimariesNamed(WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
+        params->sendSetLuminances(0, 10000, 203);
+        state.description = makeShared<CCWpImageDescriptionV1>(params->sendCreate());
+        state.description->setReady([&](CCWpImageDescriptionV1*, uint32_t) { state.descriptionReady = true; });
+        state.description->setReady2([&](CCWpImageDescriptionV1*, uint32_t, uint32_t) { state.descriptionReady = true; });
+        state.description->setFailed([&](CCWpImageDescriptionV1*, uint32_t, const char* message) {
+            std::println(stderr, "Image description failed: {}", message);
+            state.failed = true;
+        });
+        if (wl_display_roundtrip(state.display) < 0 || !state.descriptionReady)
+            return false;
+    }
+    state.surface = makeShared<CCWlSurface>(state.compositor->sendCreateSurface());
+    if (!state.sdrOnly) {
+        state.colorSurface = makeShared<CCWpColorManagementSurfaceV1>(state.color->sendGetSurface(state.surface->resource()));
+        state.colorSurface->sendSetImageDescription(state.description.get(), WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
+    }
     state.xdgSurface = makeShared<CCXdgSurface>(state.shell->sendGetXdgSurface(state.surface->resource()));
     state.toplevel   = makeShared<CCXdgToplevel>(state.xdgSurface->sendGetToplevel());
-    state.toplevel->sendSetAppId("hdr-capture-source");
-    state.toplevel->sendSetTitle("Native RGB10 capture reference (isolated lab)");
-    state.toplevel->sendSetFullscreen(nullptr);
+    state.toplevel->sendSetAppId(state.sdrOnly ? "hdr-sdr-reference" : "hdr-capture-source");
+    state.toplevel->sendSetTitle(state.sdrOnly ? "SDR reference window (isolated lab)" : "Native RGB10 capture reference (isolated lab)");
+    if (!state.sdrOnly)
+        state.toplevel->sendSetFullscreen(nullptr);
     state.toplevel->setClose([&](CCXdgToplevel*) { state.failed = true; });
     state.toplevel->setConfigure([&](CCXdgToplevel*, int32_t width, int32_t height, wl_array*) {
         if (width > 0 && height > 0) {
@@ -182,13 +188,15 @@ static bool setup(SState& state) {
             state.height = height;
         }
     });
-    state.sdrSurface    = makeShared<CCWlSurface>(state.compositor->sendCreateSurface());
-    state.sdrSubsurface = makeShared<CCWlSubsurface>(state.subcompositor->sendGetSubsurface(state.sdrSurface.get(), state.surface.get()));
-    state.sdrSubsurface->sendSetPosition(0, 320);
-    if (!makeBuffer(state, state.sdr, 512, 64, false))
-        return false;
-    state.sdrSurface->sendAttach(state.sdr.buffer.get(), 0, 0);
-    state.sdrSurface->sendCommit();
+    if (!state.sdrOnly) {
+        state.sdrSurface    = makeShared<CCWlSurface>(state.compositor->sendCreateSurface());
+        state.sdrSubsurface = makeShared<CCWlSubsurface>(state.subcompositor->sendGetSubsurface(state.sdrSurface.get(), state.surface.get()));
+        state.sdrSubsurface->sendSetPosition(0, 320);
+        if (!makeBuffer(state, state.sdr, 512, 64, false))
+            return false;
+        state.sdrSurface->sendAttach(state.sdr.buffer.get(), 0, 0);
+        state.sdrSurface->sendCommit();
+    }
     if (state.cursorEnabled) {
         if (!state.virtualPointerManager || !state.seat)
             return false;
@@ -201,7 +209,7 @@ static bool setup(SState& state) {
     }
     state.xdgSurface->setConfigure([&](CCXdgSurface* surface, uint32_t serial) {
         surface->sendAckConfigure(serial);
-        if (!makeBuffer(state, state.hdr, state.width, state.height, true)) {
+        if (!makeBuffer(state, state.hdr, state.width, state.height, !state.sdrOnly)) {
             state.failed = true;
             return;
         }
@@ -212,7 +220,8 @@ static bool setup(SState& state) {
             state.virtualPointer->sendMotionAbsolute(0, 900, 450, state.width, state.height);
             state.virtualPointer->sendFrame();
         }
-        std::println(stderr, "Ready: {}x{} XBGR2101010 BT.2020/PQ; SDR child 512x64 at 0,320; cursor={}", state.width, state.height, state.cursorEnabled);
+        std::println(stderr, "Ready: {}x{} {}; cursor={}", state.width, state.height,
+                     state.sdrOnly ? "ARGB8888 sRGB white/gray" : "XBGR2101010 BT.2020/PQ; SDR child 512x64 at 0,320", state.cursorEnabled);
     });
     state.surface->sendCommit();
     return true;
@@ -234,8 +243,13 @@ int main(int argc, char** argv) {
         state.display       = display;
         state.cursorEnabled = argc == 2 && std::string_view(argv[1]) == "--cursor";
         const bool lockMode = argc == 2 && std::string_view(argv[1]) == "--lock";
-        if (argc > 2 || (argc == 2 && !state.cursorEnabled && !lockMode)) {
-            std::println(stderr, "Usage: color-managed-source [--cursor|--lock]");
+        state.sdrOnly       = argc == 2 && std::string_view(argv[1]) == "--sdr";
+        if (state.sdrOnly) {
+            state.width  = 512;
+            state.height = 128;
+        }
+        if (argc > 2 || (argc == 2 && !state.cursorEnabled && !lockMode && !state.sdrOnly)) {
+            std::println(stderr, "Usage: color-managed-source [--cursor|--lock|--sdr]");
             wl_display_disconnect(display);
             return 1;
         }
