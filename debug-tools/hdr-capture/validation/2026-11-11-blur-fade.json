@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "issue": "Bright flash during window/menu fade in explicit HDR capture",
+  "cause": "Blur preparation applied normalized-linear-to-nits scaling to CM_TRANSFER_FUNCTION_LINEAR pixels that already stored absolute nits. At fractional window opacity, the blurred background was amplified by the 10000-nit range and clipped during PQ export. Fully opaque windows skipped that blur path.",
+  "fix": "Skip toNit for CM_TRANSFER_FUNCTION_LINEAR, consistent with doColorManagement. Normalized, PQ, sRGB and extended-linear inputs retain their existing conversions.",
+  "fixed_shader_sha256": "a4037a848f6393373508efabff2b977b7177919b143ead054003d079119af3d0",
+  "environment": {
+    "gpu": "NVIDIA RTX 3090",
+    "driver": "595.112.07",
+    "private_headless_runtime_only": true,
+    "geometry": [1024, 512],
+    "capture": "explicit BT.2020/PQ XBGR2101010 SHM",
+    "foreground": "sRGB ARGB8888 white/gray window over native RGB10 PQ patches",
+    "alpha_values": [0.1, 0.25, 0.5, 0.75, 0.9, 1],
+    "blur_enabled_values": [false, true],
+    "blur_settings": {"size": 4, "passes": 1, "noise": 0, "contrast": 1, "brightness": 1, "vibrancy": 0},
+    "samples_per_case": 256,
+    "tolerance_pq10_codes": 2
+  },
+  "before": {
+    "hyprland": "/nix/store/ns6g5aazwkxyaahkwd278xy80br52wyh-hyprland-0.57.2+date=2026-11-10_b9df23e/bin/Hyprland",
+    "cases": 12,
+    "failed_cases": 5,
+    "160_nit_white_over_160_nit_background": {
+      "expected_pq10": 569,
+      "blur_off_alpha_0_25": 569,
+      "blur_on_alpha_0_25": 1019,
+      "blur_on_alpha_1": 569
+    },
+    "evidence": "/tmp/hh.HHwxo6/blur-validation.json"
+  },
+  "after": {
+    "hyprland": "locally rebuilt build-hdr/Hyprland with the fixed shader",
+    "cases": 12,
+    "failed_cases": 0,
+    "maximum_pq10_error": 1,
+    "160_nit_white_over_160_nit_background_pq10": 569,
+    "fresh_local_unit_tests_passed": 868,
+    "evidence": "/tmp/hh.mlhK51/blur-validation.json",
+    "unit_test_log": "/tmp/hdr-blur-unit-tests.log",
+    "handoff_repeat_evidence": "/tmp/hh.EydVmW/blur-validation.json",
+    "handoff_repeat_unit_test_log": "/tmp/hdr-blur-handoff-unit-tests.log"
+  },
+  "reproduction": "nix shell --inputs-from . nixpkgs#python3 -c python3 debug-tools/hdr-capture/test-blur-fade.py --hyprland PATH_TO_HYPRLAND --tools PATH_TO_CAPTURE_AND_SOURCE_CLIENTS",
+  "limitations": [
+    "Frozen opacity steps isolate the shader defect; the exact Steam/XWayland popup sequence was not replayed.",
+    "Neutral blur adjustments isolate unit conversion from artistic brightness/contrast settings.",
+    "Production services and animation configuration were not changed or restarted by the agent.",
+    "All reproduction labs are stopped; temporary raw captures and full reports remain in the listed runtimes."
+  ]
+}

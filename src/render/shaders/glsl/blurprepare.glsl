@@ -26,7 +26,9 @@ vec4 blurPrepare(vec4 pixColor, float contrast, float brightness
         pixColor.rgb /= sdrBrightnessMultiplier;
     }
     pixColor.rgb = convertMatrix * toLinearRGB(pixColor.rgb, sourceTF);
-    pixColor     = toNit(pixColor, srcTFRange);
+    // Unscaled linear working buffers already contain absolute luminance.
+    if (sourceTF != CM_TRANSFER_FUNCTION_LINEAR)
+        pixColor = toNit(pixColor, srcTFRange);
     pixColor.rgb *= pixColor.a;
     pixColor = fromLinearNit(pixColor, targetTF, dstTFRange);
 #endif

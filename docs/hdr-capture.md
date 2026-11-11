@@ -18,13 +18,14 @@ activate a new compositor while testing. GitHub Actions on this personal fork
 are optional, not a deployment prerequisite: NixOS builds compile the exact
 locked revision, while unit/integration/hardware tests remain separate checks.
 
-**Isolated reference-fixture validation passes; not deployed.** Native RGB10
-Wayland surfaces retain all 1,024 neutral and primary-channel values. Real
-DMA-BUF readback matches SHM exactly. Stargaze captures both backends and encodes
-actual desktop frames as NVENC Main10/PQ. Real application/game content,
-end-to-end sustained target-rate streaming, and client display validation remain
-separate gates. An HDR output or ten-bit buffer alone does not establish HDR
-capture.
+**HDR streaming deployed and user-validated; the blur-flash fix below still
+needs deployment.** Native RGB10 Wayland surfaces retain all 1,024 neutral and
+primary-channel values. Real DMA-BUF readback matches SHM exactly. Stargaze
+captures both backends and encodes actual desktop frames as NVENC Main10/PQ.
+The user tested Zeus → Athena streaming for approximately 245.7 seconds with
+good visual rendering. This validates the pipeline, not physical panel luminance
+or hours-long stability. An HDR output or ten-bit buffer alone does not
+establish HDR capture. Personal-fork Actions must not be enabled for this work.
 
 ## Protocol and opt-in
 
@@ -216,15 +217,68 @@ and submission, while packet drain timing is not total hardware encoding time.
 Both continuation labs (`/tmp/hh.AKRpkT`, `/tmp/hh.UsJYRm`) are stopped. No service,
 physical output, or system configuration was changed.
 
+## User streaming validation (2026-11-11)
+
+After the signed fork publication, the user ran `nixos-rebuild test` on Zeus and
+Athena and streamed for approximately **245.7 seconds**. The user reported good
+visual rendering at 3440×1440, nominal 145 fps: approximately **143.5 fps received
+and 142.9 fps decoded**, with ten-bit limited-range BT.2020/PQ, VAAPI decoding,
+actual EGL back-buffer precision `(10,10,10)`, an acknowledged Wayland PQ image
+description, and P010 two-plane DMA-BUF import.
+
+Zeus journals confirm GPU DMA-BUF capture, RGBA16 CUDA conversion and NVENC P010
+Main10 encoding, with no observed CPU fallback or PTX errors. Logs:
+`/tmp/stargaze-zeus-hdr-user-session.log` and
+`/tmp/stargaze-zeus-hdr-launcher-session.log`. Startup losses and a queue spike
+were observed, not established as persistent network trouble. The near-zero
+reported encode time reflects timer placement, and the decoder-backpressure
+counter includes some recovery-related discards. This is pipeline/presentation
+evidence, not a physical panel-luminance measurement or a soak test. Activation
+was performed by the user; the agent's testing remained isolated and did not
+restart the live services.
+
+## Blur/fade luminance regression (2026-11-11)
+
+Opening applications and Steam dropdown menus briefly flashed brightly during
+fades. The isolated reproduction traced this to `blurprepare.glsl`: the HDR
+capture working buffer uses `CM_TRANSFER_FUNCTION_LINEAR` and already stores
+absolute nits, but blur preparation unconditionally called `toNit`, multiplying
+luminance by the source range again (typically 10,000). Fractional window opacity
+invokes background blur; full opacity skips it, explaining the return to normal.
+
+Blur preparation now skips `toNit` for unscaled linear input, matching
+`cm_helpers.glsl`. Other transfer functions keep their existing conversions.
+No animation disabling, config changes, or additional Kawase C++ change is
+needed.
+
+The [regression test](../debug-tools/hdr-capture/test-blur-fade.py) starts and
+stops its own private headless lab. It composites an SDR foreground over native
+HDR patches at six opacity steps with blur off/on (12 cases), checking four
+uniform 8×8 regions per case against expected PQ10 values, tolerance two codes.
+The [durable evidence](../debug-tools/hdr-capture/validation/2026-11-11-blur-fade.json)
+records **5/12 failures before** (all fractional-opacity blur cases) and
+**12/12 passes after**, maximum error one code. For 160-nit white over 160-nit
+background, expected PQ10 is 569; the unfixed blur path at opacity 0.25 produced
+1019, nearly 10,000 nits, then returned to 569 at full opacity. The fixed
+compositor builds and all **868 unit tests** pass. All reproduction labs are
+stopped; captures and full reports remain at the temporary paths in the record.
+
+**This shader fix is not yet deployed.** Deploy the new Zeus compositor and
+start a fresh affected session only with approval, then replay actual
+Steam/XWayland menus. Frozen opacity steps isolate the shader defect; they do
+not replay the exact popup sequence. No Athena/client/Stargaze update is needed
+for this shader fix.
+
 ## Remaining acceptance gates
 
 - Native-camera HDR/game content, hours-long soak tests, device migration, and
   more complex source/output transitions. Minute-scale stability is not a soak.
-- Sustained capture → network → AMD display at the target rate, including loss,
-  reconnects, resource usage, and actual client presentation/calibration. There
-  is no new end-to-end transport or panel-luminance result here.
+- Longer capture → network → AMD display runs, including loss, reconnects,
+  resource usage and calibration. The user run above establishes short-session
+  presentation, not physical panel luminance or long-term transport stability.
+- Deploy the blur-flash fix and recheck real application/Steam menu fades.
 - Per-frame DMA-BUF allocation remains deliberately independent. Pooling needs
   an encoder lease contract and separate evidence, not early storage reuse.
-- Rebase/sign the local commits when the key is available and rebuild the final
-  exact deployment pins. Obtain explicit approval before changing system or
-  compositor pins, activating NixOS, or restarting the remote-desktop service.
+- Publish signed changes and build the exact updated NixOS compositor pin.
+  Pin preparation/builds are authorized; obtain separate approval before
+  activating NixOS or restarting the remote-desktop service.

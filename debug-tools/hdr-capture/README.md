@@ -67,13 +67,51 @@ debug-tools/hdr-capture/stop-lab.sh "$lab"
 Cleanup verifies runtime ownership and each recorded PID's environment/process
 group. It only stops groups recorded for that lab; evidence remains on disk.
 
+## Blur/fade regression
+
+With `build-hdr/Hyprland` and the native clients built:
+
+```bash
+nix shell --inputs-from . nixpkgs#python3 -c \
+  python3 debug-tools/hdr-capture/test-blur-fade.py
+# Optional: --hyprland /nix/store/.../bin/Hyprland --tools /nix/store/.../bin
+```
+
+The test creates its own isolated 1024×512 headless lab, never connects to the
+inherited desktop, and stops the lab in `finally`. Raw PQ RGB10 captures, logs,
+and `blur-validation.json` remain in the printed runtime directory, even when
+pixel assertions fail. It checks SDR white/gray over native HDR patches at
+opacity 0.1, 0.25, 0.5, 0.75, 0.9 and 1.0, each with blur off/on. Four uniform
+8×8 regions per case must match linear-light compositing within two PQ10 codes.
+Blur adjustments are neutral to isolate luminance conversion; the lab's frozen
+opacity steps are not a replay of an animated Steam/XWayland popup.
+
+Use named window rules for opacity. `hyprctl setprop` returned `unknown request`
+with exit status zero in this version; it must not be used as a successful
+opacity update. The test checks `hyprctl eval`'s response as well as exit status.
+
+The [before/after record](validation/2026-11-11-blur-fade.json) shows five failures
+in the unfixed compositor (fractional-opacity blur) and all 12 cases passing
+with the shader fix, maximum error one code. The old blur preparation scaled
+absolute-linear nits again: 160-nit white (PQ10 569) reached code 1019 at opacity
+0.25, then returned to normal at full opacity. The fix skips that extra scaling
+for `CM_TRANSFER_FUNCTION_LINEAR`, consistent with `cm_helpers.glsl`.
+
+The user has already validated the underlying HDR streaming pipeline on Zeus →
+Athena; see [the session record](../../docs/hdr-capture.md#user-streaming-validation-2026-11-11).
+The new shader fix still needs deployment and an actual Steam menu recheck.
+Do not activate NixOS, restart live services, or change production animations
+as part of this lab test. No client or Stargaze update is required for the fix.
+
 ## Stargaze direct backend
 
-The separate `/projects/rust/stargaze-wayland` worktree vendors the same XML.
+The direct backend is integrated into `/projects/rust/stargaze` on
+`feature/hdr-safe-streaming`; `/projects/rust/stargaze-wayland` remains a
+supplementary worktree. Both vendor the same XML.
 With the native fixture running and **the lab's explicit environment exported**:
 
 ```bash
-# Run from that worktree, not the unrelated /projects/rust/stargaze worktree.
+# Run from the integrated Stargaze worktree.
 nix develop .#cuda -c cargo test -p stargaze-server wayland_native_rgb10_desktop -- --ignored
 nix develop .#cuda -c cargo test -p stargaze-server wayland_desktop_ -- --ignored --nocapture
 ```

@@ -2,7 +2,9 @@
 
 Personal Hyprland fork (official **v0.57.2** base) plus Stargaze integration.
 Personal-origin pushes and NixOS configuration preparation are authorized.
-**No upstream interaction, system activation, or service restart.**
+**No upstream interaction or agent-performed activation/service restart.**
+The user has successfully tested the deployed HDR pipeline; the new blur-flash
+shader fix is validated locally but still needs deployment.
 
 ## Worktrees and safety
 
@@ -16,8 +18,9 @@ Personal-origin pushes and NixOS configuration preparation are authorized.
 - Do not activate NixOS, replace the compositor, or restart
   `remote-desktop-Main.service` without separate approval. The launcher is a
   **system** service running as tibo; the stream is the **user** service
-  `stargaze-server.service`. Both were verified inactive, not restarted. Keep
-  the existing endpoint / port 9002 untouched.
+  `stargaze-server.service`. The user activated/tested Zeus and Athena with
+  `nixos-rebuild test`; both live services were active during the investigation.
+  The agent did not restart them. Keep the existing endpoint / port 9002 untouched.
 - Always select isolated Wayland/IPC endpoints explicitly. **All labs started
   by these continuations are stopped.** No physical outputs were used.
 
@@ -42,13 +45,20 @@ completed direct-backend plan was removed; remaining validation is in
 `plans/hdr-safe-streaming.md` in the primary Stargaze worktree. Existing untracked
 `result-hdr-*` symlinks there were left untouched.
 
-`/etc/nixos` is being prepared on `feature/zeus-headless-hdr` to use the fork's
-`hdr` branch and Stargaze's integrated branch, locked exactly. Main opts into
-direct Wayland capture; other presets keep the portal default. The extension is
-only enabled for hosts/presets selecting that backend. The launcher passes the
-selected compositor's explicit Wayland/IPC endpoints into the user service.
-Launcher mock tests pass and zeus's system derivation evaluates. Activation is
-not authorized; actual build results/configuration state live in that repository.
+`/etc/nixos` on `feature/zeus-headless-hdr` selects the fork's `hdr` branch and
+Stargaze's integrated branch, locked exactly. Prior to the blur fix, published
+configuration `2678133c2478f6d48b19efd362e7deab08316de3` pins Hyprland `a21cd8561`
+and Stargaze `d9883fd`. Keep `hyprland.inputs.nixpkgs.follows = "nixpkgs"` for
+system Mesa/glibc compatibility. Main opts into direct Wayland capture; other
+presets keep the portal default. The extension is only enabled for hosts/presets
+selecting that backend. Screencopy permission is scoped to the pinned Stargaze
+executable; global enforcement stays enabled. The launcher passes the selected
+compositor's explicit Wayland/IPC endpoints into the user service. Launcher mock
+tests pass, zeus's system derivation evaluates, and both selected packages built.
+The user subsequently activated/tested the pipeline successfully. Preparing an
+updated Hyprland pin and building it is authorized, but further activation or
+service restart still requires separate approval. Actual lock/build results
+live in that repository; Athena's animations/calibration remain unchanged.
 
 Historical Hyprland code commits (before re-signing):
 
@@ -164,21 +174,66 @@ Durable numbers, provenance, limitations, and artifact locations:
 - Packet timing begins at capture delivery; it is not full scene-render,
   hardware encoder, network, or display latency. FDs/RSS are process-local.
 
+## User streaming validation (2026-11-11)
+
+The user ran `nixos-rebuild test` on Zeus and Athena and streamed for about
+**245.7 seconds**, reporting good visual rendering. Confirmed: 3440×1440,
+nominal 145 fps, ten-bit limited-range BT.2020/PQ, approximately **143.5 fps
+received / 142.9 fps decoded**, VAAPI, actual EGL back-buffer precision
+`(10,10,10)`, acknowledged Wayland PQ image description, and P010 two-plane
+DMA-BUF import. Zeus journals confirm GPU DMA-BUF capture, RGBA16 CUDA conversion
+and NVENC P010 Main10; no observed CPU fallback or PTX errors.
+
+Logs: `/tmp/stargaze-zeus-hdr-user-session.log` and
+`/tmp/stargaze-zeus-hdr-launcher-session.log`. Startup losses and a queue spike
+are not evidence of persistent network trouble. Near-zero reported encode time
+is misleading due to timer placement; decoder backpressure also counts some
+recovery discards. This validates the pipeline and short-session presentation,
+not physical panel luminance or hours-long stability.
+
+## HDR window/menu flash fix (2026-11-11)
+
+Opening apps and Steam dropdowns briefly flashed brightly before fading normally.
+An isolated reproduction found `blurprepare.glsl` unconditionally calling
+`toNit` on the HDR capture's `CM_TRANSFER_FUNCTION_LINEAR` working buffer, which
+already stores absolute nits. This multiplied luminance again, typically by
+10,000. Fractional-opacity windows invoke blur; full opacity skips that path.
+The fix skips `toNit` for unscaled linear input, matching `cm_helpers.glsl`.
+No animation disabling, config option change, or Kawase C++ change is needed.
+
+New regression: `debug-tools/hdr-capture/test-blur-fade.py`, using its own private
+headless lab, native HDR background and SDR foreground, PQ RGB10 capture,
+six opacity steps × blur off/on, four 8×8 sample regions/case, tolerance two codes.
+Named window rules apply opacity; `hyprctl setprop` returned `unknown request`
+with exit status zero and must not be used here. Cleanup runs in `finally`.
+
+- Before: **5/12 failed**, all fractional-opacity blur cases. 160-nit white
+  expected PQ10 569, actual 1019 at blur/opacity 0.25, back to 569 at full opacity.
+- After: **12/12 passed**, maximum error one code. Fixed compositor and unit-test
+  targets built; **868 unit tests passed**.
+- Durable record: `debug-tools/hdr-capture/validation/2026-11-11-blur-fade.json`.
+- Full reports: `/tmp/hh.HHwxo6/blur-validation.json` (before),
+  `/tmp/hh.mlhK51/blur-validation.json` (after); manual reproduction `/tmp/hh.CPxw1Y`.
+  All labs are stopped. Logs: `/tmp/hdr-blur-{fixed-build,unit-build,unit-tests,fixed-regression,unfixed-regression}.log`.
+
+**Not yet deployed.** Exact Steam/XWayland menu behavior still needs a recheck
+in a fresh affected session after deployment. No Athena/client/Stargaze update
+is needed for this shader fix. Existing live sessions were not modified.
+
 ## Next steps (not blocked by signing)
 
-1. Native-camera HDR/game content and hours-long soak testing; device migration
-   and additional complex output transitions. Minute-scale tests are not a soak.
-2. Capture → transport/loss/reconnect → AMD-client presentation at target rate,
-   including client readback and calibration. No new network/display or panel
-   luminance result is claimed. Avoid launching bright content on a physical
-   output without separate approval; the user cannot visually assist currently.
-3. Build the configuration-selected package pins before activation; keep the
-   exact lock for rollback. The original unsigned measurement pins below remain
-   historical evidence, not the new deployment lock.
-4. Obtain explicit activation/restart approval before real-session testing.
-   Signing/integration/pushing are no longer blockers; activation is a separate
-   operation from preparing/building the configuration.
+1. Sign/publish the shader, regression, evidence and docs on the personal `hdr`
+   branch; do not enable fork Actions. Update only the NixOS Hyprland input,
+   keep Stargaze `d9883fd`, and build the configuration-selected compositor.
+   Sign/push the lock/docs; preserve the exact previous lock for rollback.
+2. Obtain separate activation/restart approval before deploying the new
+   compositor and starting a fresh affected session, then recheck Steam menus.
+3. Native-camera HDR/game content and hours-long soak testing; device migration,
+   additional complex output transitions, transport/loss/reconnect tests and
+   client calibration remain. Minute-scale tests are not a soak or a physical
+   panel-luminance measurement. No bright physical-output patterns without
+   separate approval.
 
 Reproduction: `debug-tools/hdr-capture/README.md`, `docs/hdr-capture.md`, and
 Stargaze `docs/hdr-streaming.md`. Its active plan remains
-`plans/hdr-safe-streaming.md` (direct backend merged; not deployed).
+`plans/hdr-safe-streaming.md` (direct backend integrated and user-tested).
