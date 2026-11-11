@@ -2,11 +2,19 @@
 
 ## Release policy and status
 
-This private patch series starts at **v0.57.2**, commit
-`11cbc6c577b84ffb1edf4df3fc5b6128c3ae6947`. For each official release, preserve
-this branch, create a new release-based branch, replay the patches, and repeat
-the checks below. Do not silently follow upstream `main` or activate a new
-compositor while testing. **No upstream submission is planned.**
+This personal-fork patch series starts at **v0.57.2**, commit
+`11cbc6c577b84ffb1edf4df3fc5b6128c3ae6947`, and lives on the single long-lived
+**`hdr` branch at `tdbmxyz/Hyprland`**. Pushes to that personal fork are allowed;
+there is no upstream submission or automated issue/PR interaction.
+
+For each new official release, preserve the last tested revision with a signed
+checkpoint tag, then rebase `hdr` from its old release base onto the new release
+tag and repeat the checks below. Publish rewritten history with
+`git push --force-with-lease origin hdr`, never an unguarded force push. There is
+no requirement to create a permanent branch per release. Collaborators must
+account for the rewritten history; deployed Nix lock files retain exact revisions
+rather than floating with the branch. Do not silently follow upstream `main` or
+activate a new compositor while testing.
 
 **Isolated reference-fixture validation passes; not deployed.** Native RGB10
 Wayland surfaces retain all 1,024 neutral and primary-channel values. Real
