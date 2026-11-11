@@ -1,27 +1,56 @@
 # HDR desktop capture — working state
 
-Private Hyprland fork (official **v0.57.2** base) plus Stargaze integration.
-**No upstream interaction, deployment, or system activation.**
+Personal Hyprland fork (official **v0.57.2** base) plus Stargaze integration.
+Personal-origin pushes and NixOS configuration preparation are authorized.
+**No upstream interaction, system activation, or service restart.**
 
 ## Worktrees and safety
 
-- Hyprland: `/projects/Hyprland`, `feature/hdr-capture-v0.57.2`.
-- Stargaze: `/projects/rust/stargaze-wayland`, `feature/wayland-hdr-capture`.
-- **Leave `/projects/rust/stargaze` untouched**; another session uses it.
+- Hyprland: `/projects/Hyprland`, long-lived **`hdr`** branch, published to
+  `git@github.com:tdbmxyz/Hyprland.git` (verified personal fork).
+- Primary Stargaze: `/projects/rust/stargaze`, **`feature/hdr-safe-streaming`**.
+  The user authorized integration here; the direct backend was merged with a
+  signed no-fast-forward merge and published to `tdbmxyz/stargaze`.
+- `/projects/rust/stargaze-wayland` remains a supplementary worktree on
+  `feature/wayland-hdr-capture`, no longer the deployment target.
 - Do not activate NixOS, replace the compositor, or restart
-  `remote-desktop-Main.service` without separate approval. That user service
-  remains **inactive**, not restarted. Keep the existing endpoint / port 9002
-  untouched.
+  `remote-desktop-Main.service` without separate approval. The launcher is a
+  **system** service running as tibo; the stream is the **user** service
+  `stargaze-server.service`. Both were verified inactive, not restarted. Keep
+  the existing endpoint / port 9002 untouched.
 - Always select isolated Wayland/IPC endpoints explicitly. **All labs started
   by these continuations are stopped.** No physical outputs were used.
 
-## Local unsigned commits are now authorized
+## Signed publication and branch workflow
 
-The user explicitly approved unsigned commits; they intend to rebase/sign when
-GPG is available. Commits use a one-command signing override; persistent Git
-signing configuration is unchanged. Nothing was pushed.
+The formerly unsigned task commits have now been re-signed with the available
+OpenPGP key; signatures verify good, and source trees are unchanged by signing.
+The original SHAs below remain the historical measurement provenance. Signed
+Hyprland equivalents: `793b957f2` (permissions), `6bddb07ba` (capture),
+`d8132d670` (tools), `31eb20b28` (evidence). Signed Stargaze equivalents:
+`1ebfe20`, `0a91559`, `75be560`, `8f1c209`.
 
-Hyprland code commits:
+Maintain ONE Hyprland `hdr` branch, rebased onto each new official release, with
+signed checkpoint tags preserving tested versions. Publish rebases using
+`--force-with-lease`, not unguarded force pushes. Nix locks retain exact revisions.
+Hyprland Actions on the personal fork are optional: the user explicitly prefers
+NixOS builds plus separately run tests, not enabling Actions as a prerequisite.
+
+Stargaze integration is published at `d9883fd` on `feature/hdr-safe-streaming`.
+Its push CI **42982066158** passed (fmt, all-target Clippy and nextest). The
+completed direct-backend plan was removed; remaining validation is in
+`plans/hdr-safe-streaming.md` in the primary Stargaze worktree. Existing untracked
+`result-hdr-*` symlinks there were left untouched.
+
+`/etc/nixos` is being prepared on `feature/zeus-headless-hdr` to use the fork's
+`hdr` branch and Stargaze's integrated branch, locked exactly. Main opts into
+direct Wayland capture; other presets keep the portal default. The extension is
+only enabled for hosts/presets selecting that backend. The launcher passes the
+selected compositor's explicit Wayland/IPC endpoints into the user service.
+Launcher mock tests pass and zeus's system derivation evaluates. Activation is
+not authorized; actual build results/configuration state live in that repository.
+
+Historical Hyprland code commits (before re-signing):
 
 - `648b9b5ad`: permission-dialog failure denies capture instead of crashing or
   granting access.
@@ -31,7 +60,7 @@ Hyprland code commits:
   full-frame composition/Main10 comparison helpers. Only test tools changed;
   the compositor rendering implementation remains the b9df23ef7 version.
 
-Stargaze code commits:
+Historical Stargaze code commits (before re-signing):
 
 - `374d22a3a5fa4bc43095d4eef7a0ab0ed3270583`: direct Wayland backend, protocol
   build wiring, dependencies, explicit CLI source selection and Main10 tests.
@@ -143,10 +172,13 @@ Durable numbers, provenance, limitations, and artifact locations:
    including client readback and calibration. No new network/display or panel
    luminance result is claimed. Avoid launching bright content on a physical
    output without separate approval; the user cannot visually assist currently.
-3. Rebase/sign when the key is available and rebuild final exact deployment pins.
-   Existing exact unsigned pins are already built, so development is not blocked.
-4. Deployment/system/service changes still require separate approval.
+3. Build the configuration-selected package pins before activation; keep the
+   exact lock for rollback. The original unsigned measurement pins below remain
+   historical evidence, not the new deployment lock.
+4. Obtain explicit activation/restart approval before real-session testing.
+   Signing/integration/pushing are no longer blockers; activation is a separate
+   operation from preparing/building the configuration.
 
 Reproduction: `debug-tools/hdr-capture/README.md`, `docs/hdr-capture.md`, and
 Stargaze `docs/hdr-streaming.md`. Its active plan remains
-`plans/wayland-hdr-capture.md` (not merged/deployed).
+`plans/hdr-safe-streaming.md` (direct backend merged; not deployed).

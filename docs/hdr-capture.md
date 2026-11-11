@@ -14,7 +14,9 @@ tag and repeat the checks below. Publish rewritten history with
 no requirement to create a permanent branch per release. Collaborators must
 account for the rewritten history; deployed Nix lock files retain exact revisions
 rather than floating with the branch. Do not silently follow upstream `main` or
-activate a new compositor while testing.
+activate a new compositor while testing. GitHub Actions on this personal fork
+are optional, not a deployment prerequisite: NixOS builds compile the exact
+locked revision, while unit/integration/hardware tests remain separate checks.
 
 **Isolated reference-fixture validation passes; not deployed.** Native RGB10
 Wayland surfaces retain all 1,024 neutral and primary-channel values. Real
